@@ -3,9 +3,12 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
+  ScrollView,
+  Keyboard,
   Platform,
   Image,
   ImageBackground,
@@ -46,8 +49,9 @@ export function LoginScreen() {
   return (
     <ImageBackground source={require("../../assets/auth-bg.png")} style={s.bg} resizeMode="cover">
       <SafeAreaView style={s.safe} edges={["top", "bottom"]}>
-        <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-          <View style={s.inner}>
+        <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={0}>
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <ScrollView contentContainerStyle={s.inner} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" bounces={false}>
 
             {/* Logo */}
             <View style={s.logoArea}>
@@ -154,7 +158,8 @@ export function LoginScreen() {
               <Text style={s.footerText}>SECURE. ENCRYPTED. TRUSTED.</Text>
             </View>
 
-          </View>
+          </ScrollView>
+          </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </ImageBackground>
@@ -165,13 +170,13 @@ const s = StyleSheet.create({
   bg: { flex: 1 },
   safe: { flex: 1, backgroundColor: "transparent" },
   kav: { flex: 1 },
-  inner: { flex: 1, justifyContent: "center", paddingHorizontal: Spacing.xl + 4 },
+  inner: { flexGrow: 1, justifyContent: "center", paddingHorizontal: Spacing.xl + 4 },
 
   logoArea: { alignItems: "center", marginBottom: 24 },
   logo: { width: 180, height: 180 },
 
   card: {
-    backgroundColor: "#09101ecc",
+    backgroundColor: Colors.bgCard + "cc",
     borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: "#ffffff12",

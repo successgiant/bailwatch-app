@@ -164,7 +164,7 @@ const s = StyleSheet.create({
   backBtn: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 20 },
   backText: { fontSize: FontSize.sm, color: Colors.muted },
   card: {
-    backgroundColor: "#09101ecc", borderRadius: Radius.xl,
+    backgroundColor: Colors.bgCard + "cc", borderRadius: Radius.xl,
     borderWidth: 1, borderColor: "#ffffff12",
     paddingHorizontal: 24, paddingVertical: 28,
   },

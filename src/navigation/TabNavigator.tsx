@@ -61,8 +61,8 @@ export function TabNavigator() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: "#070d18",
-          borderTopColor: "rgba(70,120,190,0.18)",
+          backgroundColor: Colors.bg,
+          borderTopColor: Colors.border,
           borderTopWidth: 1,
           height: Platform.OS === "ios" ? 82 : 62,
           paddingBottom: Platform.OS === "ios" ? 24 : 8,

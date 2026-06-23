@@ -24,11 +24,12 @@ export function ReportsScreen() {
 
   useEffect(() => {
     if (!identity) return
+    setLoading(true)
     Promise.all([
-      api.reports.kpis(identity).catch(() => null),
-      api.reports.counties(identity).catch(() => null),
-      api.reports.agents(identity).catch(() => null),
-      api.reports.revenue(identity).catch(() => null),
+      api.reports.kpis(identity, period).catch(() => null),
+      api.reports.counties(identity, period).catch(() => null),
+      api.reports.agents(identity, period).catch(() => null),
+      api.reports.revenue(identity, period).catch(() => null),
     ]).then(([kpis, counties, agents, revenue]) => {
       setData({ kpis, counties, agents, revenue })
     }).finally(() => setLoading(false))

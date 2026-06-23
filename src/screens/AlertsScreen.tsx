@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView, RefreshControl, Alert } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -37,21 +37,54 @@ export function AlertsScreen() {
   const [filtered, setFiltered] = useState<any[]>([])
   const [activeFilter, setActiveFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [markingAll, setMarkingAll] = useState(false)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.alerts(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.alerts(identity)
       const raw = res?.results ?? res?.data ?? res
-      setAlerts(Array.isArray(raw) ? raw : [])
-      setFiltered(Array.isArray(raw) ? raw : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      const list = Array.isArray(raw) ? raw : []
+      setAlerts(list)
+      applyFilter(activeFilter, list)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
 
   const applyFilter = (filter: string, source = alerts) => {
     setActiveFilter(filter)
     if (filter === "all") { setFiltered(source); return }
     if (filter === "unread") { setFiltered(source.filter((a) => !a.is_read && a.read !== true)); return }
     setFiltered(source.filter((a) => (a.alert_type ?? a.type ?? "").toLowerCase().includes(filter)))
+  }
+
+  const handleMarkAllRead = async () => {
+    if (!identity) return
+    setMarkingAll(true)
+    try {
+      await api.markAllRead(identity)
+      const updated = alerts.map((a) => ({ ...a, is_read: true }))
+      setAlerts(updated)
+      applyFilter(activeFilter, updated)
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not mark all read")
+    } finally { setMarkingAll(false) }
+  }
+
+  const handleMarkRead = async (item: any) => {
+    if (!identity || item.is_read) return
+    try {
+      await api.markRead(identity, item.id)
+      const updated = alerts.map((a) => a.id === item.id ? { ...a, is_read: true } : a)
+      setAlerts(updated)
+      applyFilter(activeFilter, updated)
+    } catch {}
   }
 
   const unreadCount = alerts.filter((a) => !a.is_read && a.read !== true).length
@@ -84,8 +117,11 @@ export function AlertsScreen() {
           )}
         </View>
         {unreadCount > 0 && (
-          <TouchableOpacity style={s.clearBtn}>
-            <Text style={s.clearBtnText}>Mark all read</Text>
+          <TouchableOpacity style={s.clearBtn} onPress={handleMarkAllRead} disabled={markingAll}>
+            {markingAll
+              ? <ActivityIndicator size="small" color={Colors.muted} />
+              : <Text style={s.clearBtnText}>Mark all read</Text>
+            }
           </TouchableOpacity>
         )}
       </View>
@@ -94,8 +130,8 @@ export function AlertsScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -121,6 +157,7 @@ export function AlertsScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingBottom: 32 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="checkmark-circle-outline" size={48} color={Colors.green} />
@@ -142,9 +179,10 @@ export function AlertsScreen() {
                 style={[s.alertRow, isUnread && s.alertRowUnread]}
                 activeOpacity={0.7}
                 onPress={() => {
-                  if (type.includes("arrest")) navigation.navigate("ArrestAlert")
-                  else if (type.includes("court")) navigation.navigate("Calendar")
-                  else if (type.includes("payment")) navigation.navigate("Payments")
+                  handleMarkRead(item)
+                  if (type.includes("arrest")) navigation.navigate("More" as any, { screen: "ArrestAlert" })
+                  else if (type.includes("court")) navigation.navigate("More" as any, { screen: "Calendar" })
+                  else if (type.includes("payment")) navigation.navigate("More" as any, { screen: "Payments" })
                 }}
               >
                 <View style={[s.alertIcon, { backgroundColor: config.color + "18" }]}>
@@ -180,8 +218,8 @@ const s = StyleSheet.create({
   clearBtnText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   tabsScroll: { marginBottom: Spacing.sm, height: 38 },
   tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
   tab: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },

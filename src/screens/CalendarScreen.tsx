@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView, RefreshControl, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -52,21 +52,63 @@ export function CalendarScreen() {
   const [filtered, setFiltered] = useState<any[]>([])
   const [activeFilter, setActiveFilter] = useState("upcoming")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", hearing_type: "Hearing", notes: "" })
+  const [adding, setAdding] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.courtDates(identity, { page_size: "50" }).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.courtDates(identity, { page_size: "50" })
       const raw = res?.data ?? res?.results ?? res
       const arr = Array.isArray(raw) ? raw : []
-      const sorted = arr.sort((a: any, b: any) => {
-        const da = new Date(a.court_date ?? a.date ?? "").getTime()
-        const db = new Date(b.court_date ?? b.date ?? "").getTime()
-        return da - db
-      })
+      const sorted = arr.sort((a: any, b: any) => new Date(a.court_date ?? a.date ?? "").getTime() - new Date(b.court_date ?? b.date ?? "").getTime())
       setEvents(sorted)
-      applyFilter("upcoming", sorted)
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      applyFilter(activeFilter, sorted)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleAddDate = async () => {
+    if (!identity) return
+    if (!addForm.client_name.trim() || !addForm.court_date.trim()) {
+      Alert.alert("Required", "Please enter client name and court date."); return
+    }
+    setAdding(true)
+    try {
+      await api.createCourtDate(identity, addForm)
+      setShowAdd(false)
+      setAddForm({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", hearing_type: "Hearing", notes: "" })
+      load()
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not add court date")
+    } finally { setAdding(false) }
+  }
+
+  const handleDelete = (item: any) => {
+    if (!identity) return
+    Alert.alert("Delete Court Date", `Remove court date for ${item.client_name ?? item.defendant_name ?? "this client"}?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => {
+        setDeletingId(item.id)
+        try {
+          await api.deleteCourtDate(identity, item.id)
+          const updated = events.filter((e) => e.id !== item.id)
+          setEvents(updated)
+          applyFilter(activeFilter, updated)
+        } catch (e: any) {
+          Alert.alert("Error", e?.message ?? "Could not delete")
+        } finally { setDeletingId(null) }
+      }},
+    ])
+  }
 
   const applyFilter = (filter: string, source = events) => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -107,14 +149,14 @@ export function CalendarScreen() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       {/* Header */}
       <View style={s.header}>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.gold + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.gold + "12", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.gold + "30" }}>
           <Ionicons name="calendar-outline" size={17} color={Colors.gold} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Court Calendar</Text>
           <Text style={s.subtitle}>Upcoming hearing dates</Text>
         </View>
-        <TouchableOpacity style={s.addBtn}>
+        <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
           <Ionicons name="calendar-outline" size={16} color="#fff" />
           <Text style={s.addBtnText}>Add Date</Text>
         </TouchableOpacity>
@@ -124,8 +166,8 @@ export function CalendarScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -153,6 +195,7 @@ export function CalendarScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="calendar-outline" size={48} color={Colors.mutedDim} />
@@ -232,13 +275,16 @@ export function CalendarScreen() {
                 </View>
 
                 <View style={s.cardFooter}>
-                  <TouchableOpacity style={s.footerAction}>
+                  <TouchableOpacity style={s.footerAction} onPress={() => Alert.alert("Reminder Set", "You'll be notified before this court date.")}>
                     <Ionicons name="notifications-outline" size={14} color={Colors.blueBright} />
                     <Text style={s.footerActionText}>Remind</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={s.footerAction}>
-                    <Ionicons name="create-outline" size={14} color={Colors.mutedDim} />
-                    <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>Edit</Text>
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity style={s.footerAction} onPress={() => handleDelete(item)} disabled={deletingId === item.id}>
+                    {deletingId === item.id
+                      ? <ActivityIndicator size="small" color={Colors.red} />
+                      : <><Ionicons name="trash-outline" size={14} color={Colors.red} /><Text style={[s.footerActionText, { color: Colors.red }]}>Delete</Text></>
+                    }
                   </TouchableOpacity>
                 </View>
               </View>
@@ -246,6 +292,47 @@ export function CalendarScreen() {
           }}
         />
       )}
+      {/* Add Date Modal */}
+      <Modal visible={showAdd} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <View style={s.modalCard}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>Add Court Date</Text>
+                <TouchableOpacity onPress={() => setShowAdd(false)}>
+                  <Ionicons name="close" size={22} color={Colors.muted} />
+                </TouchableOpacity>
+              </View>
+              {[
+                { key: "client_name", label: "Client Name *", placeholder: "Full name" },
+                { key: "court_date", label: "Court Date * (YYYY-MM-DD)", placeholder: "2026-07-15" },
+                { key: "court_time", label: "Time (HH:MM)", placeholder: "09:00" },
+                { key: "court_name", label: "Court Name", placeholder: "Superior Court" },
+                { key: "county", label: "County", placeholder: "Los Angeles" },
+              ].map((f) => (
+                <View key={f.key} style={s.field}>
+                  <Text style={s.fieldLabel}>{f.label}</Text>
+                  <TextInput style={s.fieldInput} value={(addForm as any)[f.key]} onChangeText={(v) => setAddForm((prev) => ({ ...prev, [f.key]: v }))} placeholder={f.placeholder} placeholderTextColor={Colors.mutedDim} />
+                </View>
+              ))}
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Hearing Type</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                  {["Hearing", "Trial", "Arraignment", "Sentencing", "Bond Review"].map((t) => (
+                    <TouchableOpacity key={t} style={[s.typeChip, addForm.hearing_type === t && s.typeChipActive]} onPress={() => setAddForm((f) => ({ ...f, hearing_type: t }))}>
+                      <Text style={[s.typeChipText, addForm.hearing_type === t && { color: "#fff" }]}>{t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+              <TouchableOpacity style={[s.submitBtn, adding && { opacity: 0.6 }]} onPress={handleAddDate} disabled={adding}>
+                {adding ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Add Court Date</Text>}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -255,12 +342,12 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
   tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
   tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
@@ -290,4 +377,16 @@ const s = StyleSheet.create({
   cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4 },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
+  modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  field: { marginBottom: Spacing.md },
+  fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
+  fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
+  typeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.xl, backgroundColor: Colors.bgInput, borderWidth: 1, borderColor: Colors.border },
+  typeChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  typeChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, letterSpacing: 0.2 },
+  submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
+  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
 })

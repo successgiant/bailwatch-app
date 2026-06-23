@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, ScrollView } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -34,46 +34,77 @@ export function MessagesScreen() {
   const [filtered, setFiltered] = useState<any[]>([])
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
+  const [composeForm, setComposeForm] = useState({ recipient: "", message: "", channel: "sms" })
+  const [sending, setSending] = useState(false)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.messages(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.messages(identity)
       const raw = res?.results ?? res?.data ?? res
-      setMessages(Array.isArray(raw) ? raw : [])
-      setFiltered(Array.isArray(raw) ? raw : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      const arr = Array.isArray(raw) ? raw : []
+      setMessages(arr)
+      applySearch(query, arr)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
 
-  const handleSearch = (text: string) => {
-    setQuery(text)
-    if (!text.trim()) { setFiltered(messages); return }
+  useEffect(() => { load() }, [identity])
+
+  const applySearch = (text: string, source = messages) => {
+    if (!text.trim()) { setFiltered(source); return }
     const q = text.toLowerCase()
-    setFiltered(messages.filter((m) =>
+    setFiltered(source.filter((m) =>
       (m.recipient_name ?? m.client_name ?? m.name ?? "").toLowerCase().includes(q) ||
       (m.body ?? m.message ?? m.content ?? "").toLowerCase().includes(q)
     ))
+  }
+
+  const handleSearch = (text: string) => {
+    setQuery(text)
+    applySearch(text)
+  }
+
+  const handleSend = async () => {
+    if (!identity) return
+    if (!composeForm.recipient.trim() || !composeForm.message.trim()) {
+      Alert.alert("Required", "Please enter a recipient and message."); return
+    }
+    setSending(true)
+    try {
+      await api.sendMessage(identity, composeForm)
+      setShowCompose(false)
+      setComposeForm({ recipient: "", message: "", channel: "sms" })
+      Alert.alert("Sent", "Your message has been sent.")
+      load()
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not send message")
+    } finally { setSending(false) }
   }
 
   const unread = messages.filter((m) => m.read === false || m.status === "unread").length
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      {/* Header */}
       <View style={s.header}>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder }}>
           <Ionicons name="chatbubbles-outline" size={17} color={Colors.blue} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Messages</Text>
           {unread > 0 && <Text style={s.subtitle}>{unread} unread message{unread > 1 ? "s" : ""}</Text>}
         </View>
-        <TouchableOpacity style={s.composeBtn}>
+        <TouchableOpacity style={s.composeBtn} onPress={() => setShowCompose(true)}>
           <Ionicons name="create-outline" size={18} color="#fff" />
           <Text style={s.composeBtnText}>New</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
         <TextInput
@@ -100,6 +131,7 @@ export function MessagesScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingBottom: 32 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="chatbubble-ellipses-outline" size={48} color={Colors.mutedDim} />
@@ -140,6 +172,43 @@ export function MessagesScreen() {
           ItemSeparatorComponent={() => <View style={s.separator} />}
         />
       )}
+
+      <Modal visible={showCompose} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <View style={s.modalCard}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>New Message</Text>
+                <TouchableOpacity onPress={() => setShowCompose(false)}>
+                  <Ionicons name="close" size={22} color={Colors.muted} />
+                </TouchableOpacity>
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Recipient *</Text>
+                <TextInput style={s.fieldInput} value={composeForm.recipient} onChangeText={(v) => setComposeForm((f) => ({ ...f, recipient: v }))} placeholder="Phone number or email" placeholderTextColor={Colors.mutedDim} autoCapitalize="none" />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Channel</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                  {["sms", "email"].map((c) => (
+                    <TouchableOpacity key={c} style={[s.typeChip, composeForm.channel === c && s.typeChipActive]} onPress={() => setComposeForm((f) => ({ ...f, channel: c }))}>
+                      <Text style={[s.typeChipText, composeForm.channel === c && { color: "#fff" }]}>{c.toUpperCase()}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Message *</Text>
+                <TextInput style={[s.fieldInput, { height: 100, textAlignVertical: "top" }]} value={composeForm.message} onChangeText={(v) => setComposeForm((f) => ({ ...f, message: v }))} placeholder="Type your message..." placeholderTextColor={Colors.mutedDim} multiline />
+              </View>
+              <TouchableOpacity style={[s.submitBtn, sending && { opacity: 0.6 }]} onPress={handleSend} disabled={sending}>
+                {sending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Send Message</Text>}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -149,8 +218,8 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.blue, marginTop: 2 },
-  composeBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  composeBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  composeBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  composeBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.md, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
@@ -169,4 +238,16 @@ const s = StyleSheet.create({
   msgPreview: { flex: 1, fontSize: FontSize.xs, color: Colors.mutedDim },
   msgPreviewUnread: { color: Colors.muted },
   separator: { height: 1, backgroundColor: Colors.borderFaint, marginLeft: 80 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
+  modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  field: { marginBottom: Spacing.md },
+  fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
+  fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
+  typeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.xl, backgroundColor: Colors.bgInput, borderWidth: 1, borderColor: Colors.border },
+  typeChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  typeChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, letterSpacing: 0.2 },
+  submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
+  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
 })

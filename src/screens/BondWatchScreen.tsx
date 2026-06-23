@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Linking } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -37,22 +37,54 @@ export function BondWatchScreen() {
   const [alertItems, setAlertItems] = useState<any[]>([])
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [resolvingId, setResolvingId] = useState<number | null>(null)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    Promise.all([
-      api.bondwatch.clients(identity).catch(() => null),
-      api.bondwatch.alerts(identity).catch(() => null),
-    ]).then(([cl, al]) => {
+    if (!quiet) setLoading(true)
+    try {
+      const [cl, al] = await Promise.all([
+        api.bondwatch.clients(identity).catch(() => null),
+        api.bondwatch.alerts(identity).catch(() => null),
+      ])
       const clientList = cl?.results ?? cl?.data ?? cl
       const arr = Array.isArray(clientList) ? clientList : []
       setClients(arr)
       setFiltered(arr)
-
       const alertList = al?.results ?? al?.data ?? al
       setAlertItems(Array.isArray(alertList) ? alertList : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleResolve = async (item: any) => {
+    if (!identity) return
+    Alert.alert("Resolve Alert", `Mark re-arrest alert for ${item.full_name ?? item.name ?? "this client"} as resolved?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Resolve", onPress: async () => {
+        setResolvingId(item.id)
+        try {
+          await api.bondwatch.clear(identity, { client_id: item.id })
+          const updated = clients.map((c) => c.id === item.id ? { ...c, status: "Active", is_rearrested: false } : c)
+          setClients(updated)
+          const q = query
+          setFiltered(q ? updated.filter((c) => (c.full_name ?? c.name ?? "").toLowerCase().includes(q.toLowerCase())) : updated)
+        } catch (e: any) {
+          Alert.alert("Error", e?.message ?? "Could not resolve alert")
+        } finally { setResolvingId(null) }
+      }},
+    ])
+  }
+
+  const handleCall = (phone: string) => {
+    if (!phone) return
+    Linking.openURL(`tel:${phone}`)
+  }
 
   const handleSearch = (text: string) => {
     setQuery(text)
@@ -82,7 +114,7 @@ export function BondWatchScreen() {
         <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder }}>
           <Ionicons name="shield-outline" size={17} color={Colors.blue} />
         </View>
         <View style={{ flex: 1 }}>
@@ -99,8 +131,8 @@ export function BondWatchScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -115,8 +147,8 @@ export function BondWatchScreen() {
               {reArrested.map((c) => c.full_name ?? c.name ?? "Unknown").join(", ")}
             </Text>
           </View>
-          <TouchableOpacity style={s.alertBannerBtn}>
-            <Text style={s.alertBannerBtnText}>Clear</Text>
+          <TouchableOpacity style={s.alertBannerBtn} onPress={() => Alert.alert("Alerts", reArrested.map((c) => c.full_name ?? c.name ?? "Unknown").join("\n"))}>
+            <Text style={s.alertBannerBtnText}>View All</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -148,6 +180,7 @@ export function BondWatchScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="shield-checkmark-outline" size={48} color={Colors.green} />
@@ -215,12 +248,15 @@ export function BondWatchScreen() {
                     </View>
                   )}
                   <View style={{ flex: 1 }} />
-                  <TouchableOpacity style={s.actionBtn}>
+                  <TouchableOpacity style={s.actionBtn} onPress={() => handleCall(item.phone ?? item.contact_phone ?? "")}>
                     <Ionicons name="call-outline" size={14} color={Colors.mutedDim} />
                   </TouchableOpacity>
                   {isAlert && (
-                    <TouchableOpacity style={s.resolveBtn}>
-                      <Text style={s.resolveBtnText}>Resolve</Text>
+                    <TouchableOpacity style={s.resolveBtn} onPress={() => handleResolve(item)} disabled={resolvingId === item.id}>
+                      {resolvingId === item.id
+                        ? <ActivityIndicator size="small" color={Colors.green} />
+                        : <Text style={s.resolveBtnText}>Resolve</Text>
+                      }
                     </TouchableOpacity>
                   )}
                 </View>
@@ -244,8 +280,8 @@ const s = StyleSheet.create({
   liveText: { fontSize: 10, color: Colors.green, fontFamily: Font.bold, letterSpacing: 1 },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   alertBanner: { flexDirection: "row", alignItems: "center", gap: Spacing.sm, marginHorizontal: Spacing.xl, marginBottom: Spacing.md, backgroundColor: Colors.red + "12", borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.red + "30", padding: Spacing.lg },
   alertBannerTitle: { fontSize: FontSize.sm, color: Colors.red, fontFamily: Font.bold },
   alertBannerText: { fontSize: FontSize.xs, color: Colors.red + "aa", marginTop: 2 },

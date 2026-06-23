@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView, RefreshControl, Alert } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -55,19 +55,59 @@ export function ArrestAlertScreen() {
   const [selectedCounty, setSelectedCounty] = useState("All")
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
+  const [addingId, setAddingId] = useState<number | null>(null)
+  const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.arrests(identity, { page_size: "50" }).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.arrests(identity, { page_size: "50" })
       const list = res?.bookings ?? res?.results ?? res?.data ?? res
       const arr = Array.isArray(list) ? list : []
       setBookings(arr)
-      setFiltered(arr)
+      applyFilters(query, selectedCounty, newOnly, arr)
       const cnts = Array.from(new Set(arr.map((b: any) => b.arresting_agency ?? b.county ?? "").filter(Boolean))) as string[]
       setCounties(cnts)
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleAddClient = async (item: any) => {
+    if (!identity) return
+    Alert.alert(
+      "Add as Client",
+      `Add ${item.full_name ?? "this person"} as a new client?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Add Client", onPress: async () => {
+          setAddingId(item.id)
+          try {
+            await api.inmateToClient(identity, { inmate_id: item.id, booking_id: item.id })
+            const updated = bookings.map((b) => b.id === item.id ? { ...b, is_client_added: true } : b)
+            setBookings(updated)
+            applyFilters(query, selectedCounty, newOnly, updated)
+            Alert.alert("Success", `${item.full_name ?? "Client"} has been added.`)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not add client.")
+          } finally { setAddingId(null) }
+        }},
+      ]
+    )
+  }
+
+  const handleIgnore = (item: any) => {
+    setIgnoredIds((prev) => new Set([...prev, item.id]))
+    const updated = bookings.filter((b) => b.id !== item.id)
+    setBookings(updated)
+    applyFilters(query, selectedCounty, newOnly, updated)
+  }
 
   const applyFilters = (q: string, county: string, onlyNew: boolean, source = bookings) => {
     let out = source
@@ -103,15 +143,7 @@ export function ArrestAlertScreen() {
             <Text style={s.liveText}>LIVE MONITORING</Text>
           </View>
         </View>
-        <TouchableOpacity style={s.refreshBtn} onPress={() => {
-          setLoading(true)
-          api.arrests(identity!, { page_size: "50" }).then((res: any) => {
-            const list = res?.bookings ?? res?.results ?? res?.data ?? res
-            const arr = Array.isArray(list) ? list : []
-            setBookings(arr)
-            applyFilters(query, selectedCounty, newOnly, arr)
-          }).finally(() => setLoading(false))
-        }}>
+        <TouchableOpacity style={s.refreshBtn} onPress={() => load()}>
           <Ionicons name="refresh-outline" size={20} color={Colors.blueBright} />
         </TouchableOpacity>
       </View>
@@ -190,6 +222,7 @@ export function ArrestAlertScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 12 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="checkmark-circle-outline" size={48} color={Colors.green} />
@@ -300,15 +333,24 @@ export function ArrestAlertScreen() {
 
                 {/* Actions */}
                 <View style={s.actions}>
-                  <TouchableOpacity style={s.actionBtnPrimary}>
-                    <Ionicons name="person-add-outline" size={14} color="#fff" />
-                    <Text style={s.actionBtnPrimaryText}>Add Client</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.actionBtn}>
-                    <Ionicons name="bookmark-outline" size={14} color={Colors.blueBright} />
-                    <Text style={s.actionBtnText}>Save</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.actionBtn}>
+                  {item.is_client_added ? (
+                    <View style={[s.actionBtnPrimary, { backgroundColor: Colors.green, flex: 1 }]}>
+                      <Ionicons name="checkmark-circle-outline" size={14} color="#fff" />
+                      <Text style={s.actionBtnPrimaryText}>Client Added</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={[s.actionBtnPrimary, addingId === item.id && { opacity: 0.6 }]}
+                      onPress={() => handleAddClient(item)}
+                      disabled={addingId === item.id}
+                    >
+                      {addingId === item.id
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <><Ionicons name="person-add-outline" size={14} color="#fff" /><Text style={s.actionBtnPrimaryText}>Add Client</Text></>
+                      }
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity style={s.actionBtn} onPress={() => handleIgnore(item)}>
                     <Ionicons name="eye-off-outline" size={14} color={Colors.mutedDim} />
                     <Text style={s.actionBtnText}>Ignore</Text>
                   </TouchableOpacity>
@@ -354,7 +396,7 @@ const s = StyleSheet.create({
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   cardNew: { borderColor: Colors.green + "40", borderLeftWidth: 3, borderLeftColor: Colors.green },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.md, marginBottom: Spacing.md },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder },
   avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontFamily: Font.extrabold },
   nameRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 3 },
   personName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },

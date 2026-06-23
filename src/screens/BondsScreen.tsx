@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -35,15 +35,43 @@ export function BondsScreen() {
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState({ defendant_name: "", bond_amount: "", premium_amount: "", county: "", bond_type: "Surety", notes: "" })
+  const [adding, setAdding] = useState(false)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.bonds(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.bonds(identity)
       const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
-      setBonds(Array.isArray(raw) ? raw : [])
-      setFiltered(Array.isArray(raw) ? raw : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      const list = Array.isArray(raw) ? raw : []
+      setBonds(list)
+      applyFilters(query, statusFilter, list)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleNewBond = async () => {
+    if (!identity) return
+    if (!addForm.defendant_name.trim() || !addForm.bond_amount.trim()) {
+      Alert.alert("Required", "Please enter defendant name and bond amount."); return
+    }
+    setAdding(true)
+    try {
+      await api.createBond(identity, addForm)
+      setShowAdd(false)
+      setAddForm({ defendant_name: "", bond_amount: "", premium_amount: "", county: "", bond_type: "Surety", notes: "" })
+      load()
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not create bond")
+    } finally { setAdding(false) }
+  }
 
   const applyFilters = (q: string, status: string, source = bonds) => {
     let out = source
@@ -82,14 +110,14 @@ export function BondsScreen() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       {/* Header */}
       <View style={s.header}>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder }}>
           <Ionicons name="shield-checkmark-outline" size={17} color={Colors.blue} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Bonds</Text>
           <Text style={s.subtitle}>{bonds.length} total bonds</Text>
         </View>
-        <TouchableOpacity style={s.addBtn}>
+        <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
           <Ionicons name="add" size={18} color="#fff" />
           <Text style={s.addBtnText}>New Bond</Text>
         </TouchableOpacity>
@@ -99,8 +127,8 @@ export function BondsScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -148,6 +176,7 @@ export function BondsScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="shield-outline" size={48} color={Colors.mutedDim} />
@@ -252,6 +281,56 @@ export function BondsScreen() {
           }}
         />
       )}
+
+      <Modal visible={showAdd} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <ScrollView style={s.modalCard} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>New Bond</Text>
+                <TouchableOpacity onPress={() => setShowAdd(false)}>
+                  <Ionicons name="close" size={22} color={Colors.muted} />
+                </TouchableOpacity>
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Defendant Name *</Text>
+                <TextInput style={s.fieldInput} value={addForm.defendant_name} onChangeText={(v) => setAddForm((f) => ({ ...f, defendant_name: v }))} placeholder="Full legal name" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Bond Amount *</Text>
+                <TextInput style={s.fieldInput} value={addForm.bond_amount} onChangeText={(v) => setAddForm((f) => ({ ...f, bond_amount: v }))} placeholder="e.g. 50000" placeholderTextColor={Colors.mutedDim} keyboardType="numeric" />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Premium Amount</Text>
+                <TextInput style={s.fieldInput} value={addForm.premium_amount} onChangeText={(v) => setAddForm((f) => ({ ...f, premium_amount: v }))} placeholder="e.g. 5000" placeholderTextColor={Colors.mutedDim} keyboardType="numeric" />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>County</Text>
+                <TextInput style={s.fieldInput} value={addForm.county} onChangeText={(v) => setAddForm((f) => ({ ...f, county: v }))} placeholder="e.g. Los Angeles" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Bond Type</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                  {["Surety", "Cash", "Property", "Federal"].map((t) => (
+                    <TouchableOpacity key={t} style={[s.typeChip, addForm.bond_type === t && s.typeChipActive]} onPress={() => setAddForm((f) => ({ ...f, bond_type: t }))}>
+                      <Text style={[s.typeChipText, addForm.bond_type === t && { color: "#fff" }]}>{t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Notes</Text>
+                <TextInput style={[s.fieldInput, { height: 80, textAlignVertical: "top" }]} value={addForm.notes} onChangeText={(v) => setAddForm((f) => ({ ...f, notes: v }))} placeholder="Additional notes..." placeholderTextColor={Colors.mutedDim} multiline />
+              </View>
+              <TouchableOpacity style={[s.submitBtn, adding && { opacity: 0.6 }]} onPress={handleNewBond} disabled={adding}>
+                {adding ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Create Bond</Text>}
+              </TouchableOpacity>
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -261,12 +340,12 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -279,7 +358,7 @@ const s = StyleSheet.create({
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder },
   avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontFamily: Font.extrabold },
   defName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
   bondNum: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
@@ -300,4 +379,16 @@ const s = StyleSheet.create({
   cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40, maxHeight: "90%" },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
+  modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  field: { marginBottom: Spacing.md },
+  fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
+  fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
+  typeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.xl, backgroundColor: Colors.bgInput, borderWidth: 1, borderColor: Colors.border },
+  typeChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  typeChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, letterSpacing: 0.2 },
+  submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
+  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
 })

@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, Linking } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -42,15 +42,28 @@ export function ESignScreen() {
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showNew, setShowNew] = useState(false)
+  const [newForm, setNewForm] = useState({ document_name: "", client_name: "", document_type: "bond_agreement" })
+  const [creating, setCreating] = useState(false)
+  const [resendingId, setResendingId] = useState<number | null>(null)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.esign(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.esign(identity)
       const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
-      setDocs(Array.isArray(raw) ? raw : [])
-      setFiltered(Array.isArray(raw) ? raw : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      const arr = Array.isArray(raw) ? raw : []
+      setDocs(arr)
+      applyFilters(query, statusFilter, arr)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
 
   const applyFilters = (q: string, status: string, source = docs) => {
     let out = source
@@ -71,6 +84,39 @@ export function ESignScreen() {
     setFiltered(out)
   }
 
+  const handleCreate = async () => {
+    if (!identity) return
+    if (!newForm.document_name.trim() || !newForm.client_name.trim()) {
+      Alert.alert("Required", "Please enter document name and client name."); return
+    }
+    setCreating(true)
+    try {
+      await api.createESign(identity, newForm)
+      setShowNew(false)
+      setNewForm({ document_name: "", client_name: "", document_type: "bond_agreement" })
+      load()
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not create document")
+    } finally { setCreating(false) }
+  }
+
+  const handleResend = async (item: any) => {
+    if (!identity) return
+    setResendingId(item.id)
+    try {
+      await api.resendESign(identity, item.id)
+      Alert.alert("Sent", "Signature request resent successfully.")
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not resend")
+    } finally { setResendingId(null) }
+  }
+
+  const handleDownload = (item: any) => {
+    const url = item.download_url ?? item.file_url ?? item.document_url ?? item.pdf_url ?? ""
+    if (!url) { Alert.alert("Unavailable", "No download link available for this document."); return }
+    Linking.openURL(url).catch(() => Alert.alert("Error", "Could not open document."))
+  }
+
   const pending = docs.filter((d) => (d.status ?? "").toLowerCase().includes("pending")).length
   const signed = docs.filter((d) => ["signed", "completed"].includes((d.status ?? "").toLowerCase())).length
   const expired = docs.filter((d) => (d.status ?? "").toLowerCase() === "expired").length
@@ -83,6 +129,7 @@ export function ESignScreen() {
   ]
 
   const statusTabs = ["all", "pending", "signed", "expired", "draft"]
+  const docTypes = ["bond_agreement", "indemnity", "collateral", "receipt", "power_of_attorney"]
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
@@ -90,14 +137,14 @@ export function ESignScreen() {
         <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.gold + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.gold + "12", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.gold + "30" }}>
           <Ionicons name="create-outline" size={17} color={Colors.gold} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>eSign Documents</Text>
           <Text style={s.subtitle}>Electronic signatures</Text>
         </View>
-        <TouchableOpacity style={s.addBtn}>
+        <TouchableOpacity style={s.addBtn} onPress={() => setShowNew(true)}>
           <Ionicons name="add" size={18} color="#fff" />
           <Text style={s.addBtnText}>New</Text>
         </TouchableOpacity>
@@ -106,8 +153,8 @@ export function ESignScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -145,6 +192,7 @@ export function ESignScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="document-text-outline" size={48} color={Colors.mutedDim} />
@@ -201,17 +249,20 @@ export function ESignScreen() {
                 </View>
 
                 <View style={s.cardFooter}>
-                  <TouchableOpacity style={s.footerAction}>
+                  <TouchableOpacity style={s.footerAction} onPress={() => handleDownload(item)}>
                     <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
                     <Text style={s.footerActionText}>View</Text>
                   </TouchableOpacity>
                   {isPending && (
-                    <TouchableOpacity style={s.footerAction}>
-                      <Ionicons name="mail-outline" size={14} color={Colors.gold} />
+                    <TouchableOpacity style={s.footerAction} onPress={() => handleResend(item)} disabled={resendingId === item.id}>
+                      {resendingId === item.id
+                        ? <ActivityIndicator size="small" color={Colors.gold} />
+                        : <Ionicons name="mail-outline" size={14} color={Colors.gold} />
+                      }
                       <Text style={[s.footerActionText, { color: Colors.gold }]}>Resend</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={s.footerAction}>
+                  <TouchableOpacity style={s.footerAction} onPress={() => handleDownload(item)}>
                     <Ionicons name="download-outline" size={14} color={Colors.mutedDim} />
                     <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>Download</Text>
                   </TouchableOpacity>
@@ -221,6 +272,43 @@ export function ESignScreen() {
           }}
         />
       )}
+
+      <Modal visible={showNew} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <View style={s.modalCard}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>New Document</Text>
+                <TouchableOpacity onPress={() => setShowNew(false)}>
+                  <Ionicons name="close" size={22} color={Colors.muted} />
+                </TouchableOpacity>
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Document Name *</Text>
+                <TextInput style={s.fieldInput} value={newForm.document_name} onChangeText={(v) => setNewForm((f) => ({ ...f, document_name: v }))} placeholder="e.g. Bond Agreement - John Doe" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Client Name *</Text>
+                <TextInput style={s.fieldInput} value={newForm.client_name} onChangeText={(v) => setNewForm((f) => ({ ...f, client_name: v }))} placeholder="Signer's full name" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Document Type</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                  {docTypes.map((t) => (
+                    <TouchableOpacity key={t} style={[s.typeChip, newForm.document_type === t && s.typeChipActive]} onPress={() => setNewForm((f) => ({ ...f, document_type: t }))}>
+                      <Text style={[s.typeChipText, newForm.document_type === t && { color: "#fff" }]}>{t.replace(/_/g, " ")}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+              <TouchableOpacity style={[s.submitBtn, creating && { opacity: 0.6 }]} onPress={handleCreate} disabled={creating}>
+                {creating ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Create & Send</Text>}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -231,12 +319,12 @@ const s = StyleSheet.create({
   backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -260,4 +348,16 @@ const s = StyleSheet.create({
   cardFooter: { flexDirection: "row", alignItems: "center", gap: 4, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
+  modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  field: { marginBottom: Spacing.md },
+  fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
+  fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
+  typeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.xl, backgroundColor: Colors.bgInput, borderWidth: 1, borderColor: Colors.border },
+  typeChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  typeChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, letterSpacing: 0.2 },
+  submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
+  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
 })

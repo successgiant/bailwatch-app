@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView, RefreshControl, Alert } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -42,15 +42,61 @@ export function BondAppScreen() {
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [decidingId, setDecidingId] = useState<number | null>(null)
+  const [sendingId, setSendingId] = useState<number | null>(null)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.bondapp(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.bondapp(identity)
       const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
-      setApps(Array.isArray(raw) ? raw : [])
-      setFiltered(Array.isArray(raw) ? raw : [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      const list = Array.isArray(raw) ? raw : []
+      setApps(list)
+      applyFilters(query, statusFilter, list)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleDecision = (item: any, decision: "approved" | "denied") => {
+    if (!identity) return
+    Alert.alert(
+      decision === "approved" ? "Approve Application" : "Deny Application",
+      `${decision === "approved" ? "Approve" : "Deny"} application for ${item.applicant_name ?? item.name ?? "this applicant"}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: decision === "approved" ? "Approve" : "Deny", style: decision === "denied" ? "destructive" : "default",
+          onPress: async () => {
+            setDecidingId(item.id)
+            try {
+              await api.bondappDecision(identity, item.id, decision)
+              const updated = apps.map((a) => a.id === item.id ? { ...a, status: decision } : a)
+              setApps(updated)
+              applyFilters(query, statusFilter, updated)
+            } catch (e: any) {
+              Alert.alert("Error", e?.message ?? "Could not update application")
+            } finally { setDecidingId(null) }
+          }
+        },
+      ]
+    )
+  }
+
+  const handleSendLink = async (item: any) => {
+    if (!identity) return
+    setSendingId(item.id)
+    try {
+      await api.bondappSendLink(identity, item.id)
+      Alert.alert("Sent", "Application link has been sent to the applicant.")
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not send link")
+    } finally { setSendingId(null) }
+  }
 
   const applyFilters = (q: string, status: string, source = apps) => {
     let out = source
@@ -86,14 +132,14 @@ export function BondAppScreen() {
         <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.purple + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.purple + "12", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.purple + "30" }}>
           <Ionicons name="document-text-outline" size={17} color={Colors.purple} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Bond Applications</Text>
           <Text style={s.subtitle}>{apps.length} applications</Text>
         </View>
-        <TouchableOpacity style={s.addBtn}>
+        <TouchableOpacity style={s.addBtn} onPress={() => Alert.alert("Send BondApp", "Select a client to send an application to.", [{ text: "OK" }])}>
           <Ionicons name="send-outline" size={14} color="#fff" />
           <Text style={s.addBtnText}>Send</Text>
         </TouchableOpacity>
@@ -102,8 +148,8 @@ export function BondAppScreen() {
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.kpiLabel}>{k.label}</Text>
+            <Text style={s.kpiValue}>{k.value}</Text>
+            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
           </View>
         ))}
       </View>
@@ -141,6 +187,7 @@ export function BondAppScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="document-text-outline" size={48} color={Colors.mutedDim} />
@@ -193,17 +240,29 @@ export function BondAppScreen() {
                 </View>
 
                 <View style={s.cardFooter}>
-                  <TouchableOpacity style={s.footerAction}>
-                    <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
-                    <Text style={s.footerActionText}>View</Text>
+                  <TouchableOpacity style={s.footerAction} onPress={() => handleSendLink(item)} disabled={sendingId === item.id}>
+                    {sendingId === item.id
+                      ? <ActivityIndicator size="small" color={Colors.blueBright} />
+                      : <><Ionicons name="send-outline" size={14} color={Colors.blueBright} /><Text style={s.footerActionText}>Resend</Text></>
+                    }
                   </TouchableOpacity>
-                  {["pending", "in_review"].includes(status.toLowerCase()) && (
+                  {["pending", "in_review", "submitted"].includes(status.toLowerCase()) && (
                     <>
-                      <TouchableOpacity style={[s.footerAction, { backgroundColor: Colors.green + "14", borderRadius: Radius.sm }]}>
-                        <Ionicons name="checkmark-outline" size={14} color={Colors.green} />
-                        <Text style={[s.footerActionText, { color: Colors.green }]}>Approve</Text>
+                      <TouchableOpacity
+                        style={[s.footerAction, { backgroundColor: Colors.green + "14", borderRadius: Radius.sm }]}
+                        onPress={() => handleDecision(item, "approved")}
+                        disabled={decidingId === item.id}
+                      >
+                        {decidingId === item.id
+                          ? <ActivityIndicator size="small" color={Colors.green} />
+                          : <><Ionicons name="checkmark-outline" size={14} color={Colors.green} /><Text style={[s.footerActionText, { color: Colors.green }]}>Approve</Text></>
+                        }
                       </TouchableOpacity>
-                      <TouchableOpacity style={[s.footerAction, { backgroundColor: Colors.red + "14", borderRadius: Radius.sm }]}>
+                      <TouchableOpacity
+                        style={[s.footerAction, { backgroundColor: Colors.red + "14", borderRadius: Radius.sm }]}
+                        onPress={() => handleDecision(item, "denied")}
+                        disabled={decidingId === item.id}
+                      >
                         <Ionicons name="close-outline" size={14} color={Colors.red} />
                         <Text style={[s.footerActionText, { color: Colors.red }]}>Deny</Text>
                       </TouchableOpacity>
@@ -225,12 +284,12 @@ const s = StyleSheet.create({
   backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
-  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -243,7 +302,7 @@ const s = StyleSheet.create({
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder },
   avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontFamily: Font.extrabold },
   appName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
   appId: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },

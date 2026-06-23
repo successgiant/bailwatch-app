@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native"
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, RefreshControl, Linking } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -19,11 +19,39 @@ export function BillingScreen() {
   const { identity } = useAuth()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.billing(identity).then((res: any) => setData(res)).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.billing(identity)
+      setData(res)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleManagePlan = () => {
+    const portalUrl = data?.subscription?.portal_url ?? data?.billing_portal_url ?? ""
+    if (portalUrl) {
+      Linking.openURL(portalUrl).catch(() => Alert.alert("Error", "Could not open billing portal."))
+    } else {
+      Alert.alert("Manage Plan", "To manage your subscription, visit the BailWatchPro web dashboard under Settings → Billing.")
+    }
+  }
+
+  const handleSelectPlan = (plan: any) => {
+    const url = plan?.checkout_url ?? data?.billing_portal_url ?? ""
+    if (url) {
+      Linking.openURL(url).catch(() => Alert.alert("Error", "Could not open checkout."))
+    } else {
+      Alert.alert("Select Plan", `To switch to ${plan?.name ?? "this plan"}, visit the BailWatchPro web dashboard under Settings → Billing.`)
+    }
+  }
 
   const subscription = data?.subscription ?? {}
   const invoices = Array.isArray(data?.invoices) ? data.invoices : Array.isArray(data?.results) ? data.results : []
@@ -35,7 +63,7 @@ export function BillingScreen() {
         <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color={Colors.text} />
         </TouchableOpacity>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.green + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.green + "12", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.green + "30" }}>
           <Ionicons name="card-outline" size={17} color={Colors.green} />
         </View>
         <Text style={s.title}>Billing</Text>
@@ -46,7 +74,7 @@ export function BillingScreen() {
           <ActivityIndicator size="large" color={Colors.blue} />
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}>
 
           {/* Current Plan */}
           <View style={s.planCard}>
@@ -65,7 +93,7 @@ export function BillingScreen() {
                 <Text style={s.planMetaText}>{subscription.seats} seats included</Text>
               </View>
             )}
-            <TouchableOpacity style={s.managePlanBtn}>
+            <TouchableOpacity style={s.managePlanBtn} onPress={handleManagePlan}>
               <Text style={s.managePlanText}>Manage Plan</Text>
             </TouchableOpacity>
           </View>
@@ -109,7 +137,7 @@ export function BillingScreen() {
                   </View>
                   <View style={s.availPlanRight}>
                     <Text style={s.availPlanPrice}>{fmtMoney(plan.price ?? plan.monthly_amount)}<Text style={s.availPlanPriceSub}>/mo</Text></Text>
-                    <TouchableOpacity style={s.selectBtn}>
+                    <TouchableOpacity style={s.selectBtn} onPress={() => handleSelectPlan(plan)}>
                       <Text style={s.selectBtnText}>Select</Text>
                     </TouchableOpacity>
                   </View>
@@ -128,7 +156,7 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center", marginRight: 4 },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
-  planCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.3)", padding: Spacing.xl, marginBottom: Spacing.xl },
+  planCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.blueBorder, padding: Spacing.xl, marginBottom: Spacing.xl },
   planTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: Spacing.md },
   planName: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
   planStatus: { fontSize: FontSize.xs, color: Colors.green, marginTop: 4 },
@@ -136,19 +164,19 @@ const s = StyleSheet.create({
   planPriceSub: { fontSize: FontSize.sm, color: Colors.mutedDim },
   planMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: Spacing.lg },
   planMetaText: { fontSize: FontSize.sm, color: Colors.mutedDim },
-  managePlanBtn: { paddingVertical: 10, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.3)", alignItems: "center" },
+  managePlanBtn: { paddingVertical: 10, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.blueBorder, alignItems: "center" },
   managePlanText: { fontSize: FontSize.sm, color: Colors.blueBright, fontFamily: Font.bold },
   sectionTitle: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold, marginBottom: Spacing.md },
-  table: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", overflow: "hidden", marginBottom: Spacing.xl },
+  table: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.blueBorder, overflow: "hidden", marginBottom: Spacing.xl },
   invoiceRow: { flexDirection: "row", alignItems: "center", padding: Spacing.lg },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: "rgba(70,120,190,0.1)" },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: Colors.rowDivider },
   invoiceDesc: { fontSize: FontSize.sm, color: Colors.text, fontFamily: Font.semibold },
   invoiceDate: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
   invoiceRight: { alignItems: "flex-end", gap: 4 },
   invoiceAmount: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.sm },
   badgeText: { fontSize: 10, fontFamily: Font.bold },
-  availPlan: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg, flexDirection: "row", alignItems: "center", gap: Spacing.md },
+  availPlan: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.blueBorder, padding: Spacing.lg, flexDirection: "row", alignItems: "center", gap: Spacing.md },
   availPlanName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
   availPlanDesc: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
   availPlanRight: { alignItems: "flex-end", gap: 8 },

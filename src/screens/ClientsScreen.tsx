@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, Linking } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -47,29 +47,56 @@ export function ClientsScreen() {
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("All")
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState({ full_name: "", phone_number: "", email: "", county: "", notes: "" })
+  const [adding, setAdding] = useState(false)
 
-  useEffect(() => {
+  const mapClient = (item: any) => ({
+    id: item.id,
+    name: item.full_name ?? item.name ?? "",
+    case_number: item.booking_number ?? item.case_number ?? "",
+    county: item.arresting_agency ?? item.county ?? "",
+    status: item.case_status ?? item.status ?? "prospect",
+    status_display: item.case_status_display ?? item.status_display ?? "",
+    phone: item.phone_number ?? item.phone ?? "",
+    bond_amount: item.bond_amount ?? 0,
+    balance: item.balance ?? 0,
+    court_date: item.court_date ?? null,
+    charges: item.charges ?? item.charges_description ?? "",
+    email: item.email ?? "",
+  })
+
+  const load = async (quiet = false) => {
     if (!identity) return
-    api.clients(identity).then((res: any) => {
+    if (!quiet) setLoading(true)
+    try {
+      const res: any = await api.clients(identity)
       const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
-      const arr = Array.isArray(raw) ? raw.map((item: any) => ({
-        id: item.id,
-        name: item.full_name ?? item.name ?? "",
-        case_number: item.booking_number ?? item.case_number ?? "",
-        county: item.arresting_agency ?? item.county ?? "",
-        status: item.case_status ?? item.status ?? "prospect",
-        status_display: item.case_status_display ?? item.status_display ?? "",
-        phone: item.phone_number ?? item.phone ?? "",
-        bond_amount: item.bond_amount ?? 0,
-        balance: item.balance ?? 0,
-        court_date: item.court_date ?? null,
-        charges: item.charges ?? item.charges_description ?? "",
-        email: item.email ?? "",
-      })) : []
+      const arr = Array.isArray(raw) ? raw.map(mapClient) : []
       setClients(arr)
-      setFiltered(arr)
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [identity])
+      applyFilters(query, statusFilter, arr)
+    } catch {} finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => { load() }, [identity])
+
+  const handleAddClient = async () => {
+    if (!identity) return
+    if (!addForm.full_name.trim()) { Alert.alert("Required", "Please enter the client's full name."); return }
+    setAdding(true)
+    try {
+      await api.createClient(identity, addForm)
+      setShowAdd(false)
+      setAddForm({ full_name: "", phone_number: "", email: "", county: "", notes: "" })
+      load()
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not add client")
+    } finally { setAdding(false) }
+  }
 
   const applyFilters = (q: string, status: string, source = clients) => {
     let out = source
@@ -101,14 +128,14 @@ export function ClientsScreen() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       {/* Header */}
       <View style={s.header}>
-        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueBright + "18", alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder }}>
           <Ionicons name="people-outline" size={17} color={Colors.blueBright} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Client Cases</Text>
           <Text style={s.subtitle}>{clients.length} total clients</Text>
         </View>
-        <TouchableOpacity style={s.addBtn}>
+        <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
           <Ionicons name="person-add-outline" size={16} color="#fff" />
           <Text style={s.addBtnText}>Add Client</Text>
         </TouchableOpacity>
@@ -159,6 +186,7 @@ export function ClientsScreen() {
           keyExtractor={(item) => String(item.id ?? Math.random())}
           contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="people-outline" size={48} color={Colors.mutedDim} />
@@ -217,28 +245,55 @@ export function ClientsScreen() {
                 </View>
 
                 <View style={s.cardFooter}>
-                  <TouchableOpacity style={s.footerAction}>
-                    <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
-                    <Text style={s.footerActionText}>View</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.footerAction}>
-                    <Ionicons name="send-outline" size={14} color={Colors.mutedDim} />
-                    <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>BondApp</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.footerAction}>
-                    <Ionicons name="card-outline" size={14} color={Colors.green} />
-                    <Text style={[s.footerActionText, { color: Colors.green }]}>Payment</Text>
-                  </TouchableOpacity>
+                  {!!item.phone && (
+                    <TouchableOpacity style={s.footerAction} onPress={() => Linking.openURL(`tel:${item.phone}`)}>
+                      <Ionicons name="call-outline" size={14} color={Colors.blueBright} />
+                      <Text style={s.footerActionText}>Call</Text>
+                    </TouchableOpacity>
+                  )}
+                  {!!item.email && (
+                    <TouchableOpacity style={s.footerAction} onPress={() => Linking.openURL(`mailto:${item.email}`)}>
+                      <Ionicons name="mail-outline" size={14} color={Colors.mutedDim} />
+                      <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>Email</Text>
+                    </TouchableOpacity>
+                  )}
                   <View style={{ flex: 1 }} />
-                  <TouchableOpacity>
-                    <Ionicons name="chevron-forward" size={16} color={Colors.mutedDim} />
-                  </TouchableOpacity>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.mutedDim} />
                 </View>
               </TouchableOpacity>
             )
           }}
         />
       )}
+      <Modal visible={showAdd} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <View style={s.modalCard}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>Add New Client</Text>
+                <TouchableOpacity onPress={() => setShowAdd(false)}>
+                  <Ionicons name="close" size={22} color={Colors.muted} />
+                </TouchableOpacity>
+              </View>
+              {[
+                { key: "full_name", label: "Full Name *", placeholder: "John Smith", keyboard: "default" as const },
+                { key: "phone_number", label: "Phone", placeholder: "+1 (555) 000-0000", keyboard: "phone-pad" as const },
+                { key: "email", label: "Email", placeholder: "client@email.com", keyboard: "email-address" as const },
+                { key: "county", label: "County", placeholder: "Los Angeles", keyboard: "default" as const },
+              ].map((f) => (
+                <View key={f.key} style={s.field}>
+                  <Text style={s.fieldLabel}>{f.label}</Text>
+                  <TextInput style={s.fieldInput} value={(addForm as any)[f.key]} onChangeText={(v) => setAddForm((prev) => ({ ...prev, [f.key]: v }))} placeholder={f.placeholder} placeholderTextColor={Colors.mutedDim} keyboardType={f.keyboard} autoCapitalize={f.keyboard === "email-address" ? "none" : "words"} />
+                </View>
+              ))}
+              <TouchableOpacity style={[s.submitBtn, adding && { opacity: 0.6 }]} onPress={handleAddClient} disabled={adding}>
+                {adding ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Add Client</Text>}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -248,8 +303,8 @@ const s = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
+  addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -259,7 +314,7 @@ const s = StyleSheet.create({
   tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
   tabTextActive: { color: "#fff" },
   tabCount: { backgroundColor: Colors.bgPanel, borderRadius: 9, minWidth: 18, height: 18, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
-  tabCountActive: { backgroundColor: "#ffffff30" },
+  tabCountActive: { backgroundColor: Colors.border },
   tabCountText: { fontSize: 9, color: Colors.muted, fontFamily: Font.bold },
   tabCountTextActive: { color: "#fff" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
@@ -279,4 +334,13 @@ const s = StyleSheet.create({
   cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4 },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: Radius.sm },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
+  modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  field: { marginBottom: Spacing.md },
+  fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
+  fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
+  submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
+  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
 })

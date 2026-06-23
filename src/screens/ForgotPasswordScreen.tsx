@@ -22,14 +22,18 @@ export function ForgotPasswordScreen() {
     setError("")
     setLoading(true)
     try {
-      await fetch(`${BASE}/api/password-reset/request/`, {
+      const res = await fetch(`${BASE}/api/password-reset/request/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identity: identity.trim() }),
       })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j?.detail ?? `Server error ${res.status}`)
+      }
       setSent(true)
-    } catch {
-      setError("Could not connect. Check your connection and try again.")
+    } catch (e: any) {
+      setError(e?.message ?? "Could not connect. Check your connection and try again.")
     } finally {
       setLoading(false)
     }
@@ -122,7 +126,7 @@ const s = StyleSheet.create({
   backBtn: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 20 },
   backText: { fontSize: FontSize.sm, color: Colors.muted },
   card: {
-    backgroundColor: "#09101ecc", borderRadius: Radius.xl,
+    backgroundColor: Colors.bgCard + "cc", borderRadius: Radius.xl,
     borderWidth: 1, borderColor: "#ffffff12",
     paddingHorizontal: 24, paddingVertical: 28,
   },
