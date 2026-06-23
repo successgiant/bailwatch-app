@@ -20,6 +20,8 @@ import { BillingScreen } from "../screens/BillingScreen"
 import { MessagesScreen } from "../screens/MessagesScreen"
 import { CountyCoverageScreen } from "../screens/CountyCoverageScreen"
 import { BondTrackScreen } from "../screens/BondTrackScreen"
+import { DocumentsScreen } from "../screens/DocumentsScreen"
+import { ClientCaseDetailScreen } from "../screens/ClientCaseDetailScreen"
 import { Colors, FontSize } from "../constants/theme"
 import type { MoreStackParamList } from "../types"
 
@@ -51,6 +53,8 @@ function MoreNavigator() {
       <MoreStack.Screen name="Messages" component={MessagesScreen} options={{ headerShown: false }} />
       <MoreStack.Screen name="CountyCoverage" component={CountyCoverageScreen} options={{ headerShown: false }} />
       <MoreStack.Screen name="BondTrack" component={BondTrackScreen} options={{ headerShown: false }} />
+      <MoreStack.Screen name="Documents" component={DocumentsScreen} options={{ headerShown: false }} />
+      <MoreStack.Screen name="ClientDetail" component={ClientCaseDetailScreen} options={{ headerShown: false }} />
     </MoreStack.Navigator>
   )
 }

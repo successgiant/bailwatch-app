@@ -8,7 +8,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
 import { useNavigation } from "@react-navigation/native"
 import { useAuth } from "../context/AuthContext"
-import { api } from "../lib/api"
+import { api, apiDelete } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
 function fmtDate(d: string): string {
@@ -56,6 +56,8 @@ export function BondAppScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [decidingId, setDecidingId] = useState<number | null>(null)
   const [sendingId, setSendingId] = useState<number | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   const [showModal, setShowModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({
@@ -152,6 +154,29 @@ export function BondAppScreen() {
     }
   }
 
+  const handleDelete = (item: any) => {
+    if (!identity) return
+    Alert.alert(
+      "Delete Application",
+      `Delete application for ${item.applicant_name ?? "this applicant"}? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete", style: "destructive",
+          onPress: async () => {
+            setDeletingId(item.id)
+            try {
+              await apiDelete(`applications/${item.id}/`, identity)
+              setApps((prev) => prev.filter((a) => a.id !== item.id))
+            } catch (e: any) {
+              Alert.alert("Error", e?.message ?? "Could not delete application")
+            } finally { setDeletingId(null) }
+          },
+        },
+      ]
+    )
+  }
+
   const handleCreate = async () => {
     if (!form.applicant_name.trim()) {
       Alert.alert("Required", "Applicant name is required.")
@@ -190,6 +215,12 @@ export function BondAppScreen() {
           <Text style={s.title}>Bond Applications</Text>
           <Text style={s.headerSub}>{mapped.length} application{mapped.length !== 1 ? "s" : ""}</Text>
         </View>
+        <TouchableOpacity
+          style={s.intakeBtn}
+          onPress={() => Alert.alert("Public Intake", "Share your public intake link from the web dashboard → BondApp → Public Intake Link")}
+        >
+          <Text style={s.intakeBtnText}>Intake Form →</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={s.addBtn} onPress={() => setShowModal(true)}>
           <Ionicons name="send-outline" size={13} color={Colors.blueLight} />
           <Text style={s.addBtnText}>Send New</Text>
@@ -279,39 +310,120 @@ export function BondAppScreen() {
             const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
             const rawStatus = (item.status ?? "").toLowerCase()
             const canDecide = ["new", "in_review", "submitted"].includes(rawStatus)
+            const isExpanded = expandedId === item.id
+            const isDeleting = deletingId === item.id
 
             return (
               <View style={s.card}>
-                <View style={s.cardTop}>
-                  <View style={s.avatar}>
-                    <Text style={s.avatarText}>{initials}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.appName}>{name}</Text>
-                    <View style={s.metaRow}>
-                      {!!county && (
-                        <View style={s.metaItem}>
-                          <Ionicons name="location-outline" size={11} color={Colors.mutedDim} />
-                          <Text style={s.metaText}>{county}</Text>
-                        </View>
-                      )}
-                      {!!phone && (
-                        <View style={s.metaItem}>
-                          <Ionicons name="call-outline" size={11} color={Colors.mutedDim} />
-                          <Text style={s.metaText}>{phone}</Text>
-                        </View>
-                      )}
+                {/* Tappable card top toggles expand */}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => setExpandedId(isExpanded ? null : item.id)}
+                >
+                  <View style={s.cardTop}>
+                    <View style={s.avatar}>
+                      <Text style={s.avatarText}>{initials}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.appName}>{name}</Text>
+                      <View style={s.metaRow}>
+                        {!!county && (
+                          <View style={s.metaItem}>
+                            <Ionicons name="location-outline" size={11} color={Colors.mutedDim} />
+                            <Text style={s.metaText}>{county}</Text>
+                          </View>
+                        )}
+                        {!!phone && (
+                          <View style={s.metaItem}>
+                            <Ionicons name="call-outline" size={11} color={Colors.mutedDim} />
+                            <Text style={s.metaText}>{phone}</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    <View style={{ alignItems: "flex-end", gap: 6 }}>
+                      <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                        <Text style={[s.statusText, { color: sc.text }]}>{displayStatus}</Text>
+                      </View>
+                      {isDeleting
+                        ? <ActivityIndicator size="small" color={Colors.red} />
+                        : (
+                          <TouchableOpacity
+                            style={s.deleteBtn}
+                            onPress={() => handleDelete(item)}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <Ionicons name="trash-outline" size={14} color={Colors.red} />
+                          </TouchableOpacity>
+                        )
+                      }
                     </View>
                   </View>
-                  <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
-                    <Text style={[s.statusText, { color: sc.text }]}>{displayStatus}</Text>
-                  </View>
-                </View>
 
-                {!!dateSent && dateSent !== "—" && (
-                  <View style={s.dateRow}>
-                    <Ionicons name="calendar-outline" size={11} color={Colors.mutedDim} />
-                    <Text style={s.dateText}>Sent {dateSent}</Text>
+                  {!!dateSent && dateSent !== "—" && (
+                    <View style={s.dateRow}>
+                      <Ionicons name="calendar-outline" size={11} color={Colors.mutedDim} />
+                      <Text style={s.dateText}>Sent {dateSent}</Text>
+                      <Ionicons
+                        name={isExpanded ? "chevron-up" : "chevron-down"}
+                        size={11}
+                        color={Colors.mutedDim}
+                        style={{ marginLeft: "auto" }}
+                      />
+                    </View>
+                  )}
+                </TouchableOpacity>
+
+                {/* Expanded detail panel */}
+                {isExpanded && (
+                  <View style={s.expandedSection}>
+                    <View style={s.expandDivider} />
+                    {!!item.applicant_address && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Address</Text>
+                        <Text style={s.expandValue}>{item.applicant_address}</Text>
+                      </View>
+                    )}
+                    {!!item.applicant_email && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Email</Text>
+                        <Text style={s.expandValue}>{item.applicant_email}</Text>
+                      </View>
+                    )}
+                    {!!item.applicant_phone && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Phone</Text>
+                        <Text style={s.expandValue}>{item.applicant_phone}</Text>
+                      </View>
+                    )}
+                    {!!item.county_name && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>County</Text>
+                        <Text style={s.expandValue}>{item.county_name}</Text>
+                      </View>
+                    )}
+                    {!!item.submitted_at && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Submitted</Text>
+                        <Text style={s.expandValue}>{fmtDate(item.submitted_at)}</Text>
+                      </View>
+                    )}
+                    {!!item.application_token && (
+                      <TouchableOpacity
+                        style={s.linkRow}
+                        onPress={() => Linking.openURL(`https://bailwatchpro.com/bond-app/client/${item.application_token}`).catch(() => Alert.alert("Error", "Could not open link"))}
+                      >
+                        <Ionicons name="link-outline" size={13} color={Colors.blueBright} />
+                        <Text style={s.linkText}>View Application Link</Text>
+                        <Ionicons name="open-outline" size={12} color={Colors.blueBright} />
+                      </TouchableOpacity>
+                    )}
+                    {!!(item.case_notes ?? item.intake_notes) && (
+                      <View style={{ marginTop: 6 }}>
+                        <Text style={s.expandLabel}>Notes</Text>
+                        <Text style={s.expandNotes}>{item.case_notes ?? item.intake_notes}</Text>
+                      </View>
+                    )}
                   </View>
                 )}
 
@@ -483,7 +595,7 @@ export function BondAppScreen() {
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   header: {
-    flexDirection: "row", alignItems: "center", gap: Spacing.md,
+    flexDirection: "row", alignItems: "center", gap: Spacing.sm,
     marginHorizontal: Spacing.xl, marginVertical: Spacing.sm,
     backgroundColor: Colors.bgCard, borderRadius: Radius.lg,
     borderWidth: 1, borderColor: Colors.border,
@@ -497,6 +609,11 @@ const s = StyleSheet.create({
   },
   title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   headerSub: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
+  intakeBtn: {
+    paddingHorizontal: 8, paddingVertical: 6, borderRadius: Radius.sm,
+    backgroundColor: Colors.bgPanel, borderWidth: 1, borderColor: Colors.border,
+  },
+  intakeBtnText: { fontSize: 10, color: Colors.muted, fontFamily: Font.semibold },
   addBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm,
@@ -565,11 +682,26 @@ const s = StyleSheet.create({
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.sm },
   statusText: { fontSize: 10, fontFamily: Font.bold },
+  deleteBtn: { padding: 2 },
   dateRow: {
     flexDirection: "row", alignItems: "center", gap: 4,
     marginBottom: 8,
   },
   dateText: { fontSize: FontSize.xs, color: Colors.mutedDim },
+  // Expanded section
+  expandedSection: { paddingTop: 6, marginBottom: 8 },
+  expandDivider: { height: 1, backgroundColor: Colors.borderFaint, marginBottom: 10 },
+  expandRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
+  expandLabel: { fontSize: FontSize.xs, color: Colors.mutedDim, fontFamily: Font.semibold },
+  expandValue: { fontSize: FontSize.xs, color: Colors.text, fontFamily: Font.semibold, flexShrink: 1, textAlign: "right", maxWidth: "65%" },
+  expandNotes: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 4, lineHeight: 18 },
+  linkRow: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    marginTop: 6, paddingVertical: 8, paddingHorizontal: 10,
+    borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle,
+    borderWidth: 1, borderColor: Colors.blueBorder,
+  },
+  linkText: { flex: 1, fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
   cardFooter: {
     flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4,
     paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint,

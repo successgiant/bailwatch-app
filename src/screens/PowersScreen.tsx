@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
 import { useNavigation } from "@react-navigation/native"
 import { useAuth } from "../context/AuthContext"
-import { api } from "../lib/api"
+import { api, apiPatch } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
 function fmtDate(d: string): string {
@@ -43,7 +43,7 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   Active: { bg: Colors.green + "18", text: Colors.green },
 }
 
-const STATUS_TABS = ["All", "Available", "Used", "Expired", "Voided"]
+const STATUS_TABS = ["All", "Available", "Expiring", "Used", "Expired", "Voided"]
 
 export function PowersScreen() {
   const navigation = useNavigation()
@@ -65,6 +65,7 @@ export function PowersScreen() {
     expiration_date: "",
   })
   const [adding, setAdding] = useState(false)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
   const load = async (quiet = false) => {
     if (!identity) return
@@ -85,7 +86,15 @@ export function PowersScreen() {
 
   const applyFilters = (q: string, status: string, source = powers) => {
     let out = source
-    if (status !== "All") out = out.filter((p) => (p.status ?? "").toLowerCase() === status.toLowerCase())
+    if (status === "Expiring") {
+      out = out.filter((p) => {
+        const expiringSoon = p.expiring_soon ?? false
+        const days = daysUntilExpiry(p.expiration_date ?? p.expiry_date ?? "")
+        return expiringSoon || (days >= 0 && days <= 30)
+      })
+    } else if (status !== "All") {
+      out = out.filter((p) => (p.status ?? "").toLowerCase() === status.toLowerCase())
+    }
     if (q.trim()) {
       const lq = q.toLowerCase()
       out = out.filter((p) =>
@@ -95,6 +104,25 @@ export function PowersScreen() {
       )
     }
     setFiltered(out)
+  }
+
+  const handleVoid = (item: any) => {
+    if (!identity) return
+    Alert.alert("Void Power", `Void power #${item.power_number ?? item.number ?? item.id}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Void", style: "destructive", onPress: async () => {
+          try {
+            await apiPatch("powers/" + item.id + "/", identity, { status: "voided" })
+            const updated = powers.map((p) => p.id === item.id ? { ...p, status: "voided" } : p)
+            setPowers(updated)
+            applyFilters(query, statusFilter, updated)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not void power")
+          }
+        }
+      },
+    ])
   }
 
   const handleAdd = async () => {
@@ -135,6 +163,11 @@ export function PowersScreen() {
   const availableCount = powers.filter((p) => ["available", "active"].includes((p.status ?? "").toLowerCase())).length
   const usedCount = powers.filter((p) => (p.status ?? "").toLowerCase() === "used").length
   const expiredCount = powers.filter((p) => (p.status ?? "").toLowerCase() === "expired").length
+  const expiringCount = powers.filter((p) => {
+    const expiringSoon = p.expiring_soon ?? false
+    const days = daysUntilExpiry(p.expiration_date ?? p.expiry_date ?? "")
+    return expiringSoon || (days >= 0 && days <= 30)
+  }).length
 
   const kpiItems = [
     { label: "Total", value: String(totalCount), color: Colors.text },
@@ -183,15 +216,26 @@ export function PowersScreen() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
-        {STATUS_TABS.map((t) => (
-          <TouchableOpacity
-            key={t}
-            style={[s.tab, statusFilter === t && s.tabActive]}
-            onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
-          >
-            <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>{t}</Text>
-          </TouchableOpacity>
-        ))}
+        {STATUS_TABS.map((t) => {
+          const isExpiring = t === "Expiring"
+          const showBadge = isExpiring && expiringCount > 0
+          return (
+            <TouchableOpacity
+              key={t}
+              style={[s.tab, statusFilter === t && s.tabActive]}
+              onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>{t}</Text>
+                {showBadge && (
+                  <View style={[s.tabBadge, statusFilter === t && { backgroundColor: Colors.gold + "40" }]}>
+                    <Text style={s.tabBadgeText}>{expiringCount}</Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+          )
+        })}
       </ScrollView>
 
       {loading ? (
@@ -222,64 +266,106 @@ export function PowersScreen() {
             const days = daysUntilExpiry(expirationDate)
             const isExpiringSoon = expiringSoon || (days >= 0 && days <= 30)
             const prefix = item.prefix ?? ""
+            const batchId = item.batch_id ?? ""
+            const receivedDate = item.received_date ?? ""
+            const isAvailable = (status ?? "").toLowerCase() === "available"
+            const isExpanded = expandedId === item.id
 
             return (
               <View style={[s.card, isExpiringSoon && s.cardWarning]}>
-                <View style={s.cardTop}>
-                  <View style={s.powerIcon}>
-                    <Ionicons name="briefcase-outline" size={20} color={Colors.blue} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <Text style={s.powerNum}>POA #{powerNum}</Text>
-                      {isExpiringSoon && (
-                        <View style={s.expiringSoonBadge}>
-                          <Text style={s.expiringSoonText}>EXPIRING SOON</Text>
-                        </View>
-                      )}
+                <TouchableOpacity activeOpacity={0.85} onPress={() => setExpandedId(isExpanded ? null : item.id)}>
+                  <View style={s.cardTop}>
+                    <View style={s.powerIcon}>
+                      <Ionicons name="briefcase-outline" size={20} color={Colors.blue} />
                     </View>
-                    {!!prefix && <Text style={s.prefixText}>Prefix: {prefix}</Text>}
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={s.powerNum}>POA #{powerNum}</Text>
+                        {isExpiringSoon && (
+                          <View style={s.expiringSoonBadge}>
+                            <Text style={s.expiringSoonText}>EXPIRING SOON</Text>
+                          </View>
+                        )}
+                      </View>
+                      {!!prefix && <Text style={s.prefixText}>Prefix: {prefix}</Text>}
+                    </View>
+                    <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                      <Text style={[s.statusText, { color: sc.text }]}>{status}</Text>
+                    </View>
+                    <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color={Colors.mutedDim} />
                   </View>
-                  <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
-                    <Text style={[s.statusText, { color: sc.text }]}>{status}</Text>
-                  </View>
-                </View>
 
-                {!!faceAmount && (
-                  <View style={s.amountRow}>
-                    <Text style={s.amountLabel}>Face Amount</Text>
-                    <Text style={s.amountValue}>{fmtMoney(faceAmount)}</Text>
+                  {!!faceAmount && (
+                    <View style={s.amountRow}>
+                      <Text style={s.amountLabel}>Face Amount</Text>
+                      <Text style={s.amountValue}>{fmtMoney(faceAmount)}</Text>
+                    </View>
+                  )}
+
+                  <View style={s.metaRow}>
+                    {!!suretyName && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="business-outline" size={12} color={Colors.mutedDim} />
+                        <Text style={s.metaText}>{suretyName}</Text>
+                      </View>
+                    )}
+                    {!!expirationDate && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="time-outline" size={12} color={isExpiringSoon ? Colors.gold : Colors.mutedDim} />
+                        <Text style={[s.metaText, isExpiringSoon && { color: Colors.gold }]}>
+                          Expires {fmtDate(expirationDate)}{isExpiringSoon && days < Infinity ? ` (${days}d)` : ""}
+                        </Text>
+                      </View>
+                    )}
+                    {!!linkedDefendant && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="person-outline" size={12} color={Colors.mutedDim} />
+                        <Text style={s.metaText}>Bond: {linkedDefendant}</Text>
+                      </View>
+                    )}
+                    {!!assignedAgent && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="shield-outline" size={12} color={Colors.mutedDim} />
+                        <Text style={s.metaText}>{assignedAgent}</Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+
+                {isExpanded && (
+                  <View style={s.expandedSection}>
+                    {!!batchId && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Batch ID</Text>
+                        <Text style={s.expandValue}>{batchId}</Text>
+                      </View>
+                    )}
+                    {!!prefix && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Prefix</Text>
+                        <Text style={s.expandValue}>{prefix}</Text>
+                      </View>
+                    )}
+                    {!!receivedDate && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Received</Text>
+                        <Text style={s.expandValue}>{fmtDate(receivedDate)}</Text>
+                      </View>
+                    )}
+                    {!!assignedAgent && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Assigned Agent</Text>
+                        <Text style={s.expandValue}>{assignedAgent}</Text>
+                      </View>
+                    )}
+                    {!!linkedDefendant && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Linked Bond</Text>
+                        <Text style={s.expandValue}>{linkedDefendant}</Text>
+                      </View>
+                    )}
                   </View>
                 )}
-
-                <View style={s.metaRow}>
-                  {!!suretyName && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="business-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{suretyName}</Text>
-                    </View>
-                  )}
-                  {!!expirationDate && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="time-outline" size={12} color={isExpiringSoon ? Colors.gold : Colors.mutedDim} />
-                      <Text style={[s.metaText, isExpiringSoon && { color: Colors.gold }]}>
-                        Expires {fmtDate(expirationDate)}{isExpiringSoon && days < Infinity ? ` (${days}d)` : ""}
-                      </Text>
-                    </View>
-                  )}
-                  {!!linkedDefendant && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="person-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>Bond: {linkedDefendant}</Text>
-                    </View>
-                  )}
-                  {!!assignedAgent && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="shield-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{assignedAgent}</Text>
-                    </View>
-                  )}
-                </View>
 
                 <View style={s.cardFooter}>
                   <TouchableOpacity style={s.footerAction} onPress={() => handleView(item)}>
@@ -290,6 +376,12 @@ export function PowersScreen() {
                     <Ionicons name="download-outline" size={14} color={Colors.mutedDim} />
                     <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>Download</Text>
                   </TouchableOpacity>
+                  {isAvailable && (
+                    <TouchableOpacity style={[s.footerAction, { marginLeft: "auto" }]} onPress={() => handleVoid(item)}>
+                      <Ionicons name="close-circle-outline" size={14} color={Colors.red} />
+                      <Text style={[s.footerActionText, { color: Colors.red }]}>Void</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             )
@@ -367,6 +459,8 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
   tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
   tabTextActive: { color: Colors.text },
+  tabBadge: { backgroundColor: Colors.gold + "28", borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 },
+  tabBadgeText: { fontSize: 9, color: Colors.gold, fontFamily: Font.bold },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
@@ -385,6 +479,10 @@ const s = StyleSheet.create({
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
+  expandedSection: { borderTopWidth: 1, borderTopColor: Colors.borderFaint, paddingTop: Spacing.md, marginTop: Spacing.sm, gap: 8 },
+  expandRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  expandLabel: { fontSize: FontSize.xs, color: Colors.mutedDim, fontFamily: Font.semibold },
+  expandValue: { fontSize: FontSize.xs, color: Colors.text, fontFamily: Font.semibold, flexShrink: 1, textAlign: "right" },
   cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4 },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },

@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
 import { useNavigation } from "@react-navigation/native"
 import { useAuth } from "../context/AuthContext"
-import { api } from "../lib/api"
+import { api, apiPatch } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
 function fmtDate(d: string): string {
@@ -39,6 +39,7 @@ const FILTER_TABS: { key: string; label: string }[] = [
   { key: "Awaiting", label: "Awaiting" },
   { key: "Signed", label: "Signed" },
   { key: "Expired", label: "Expired" },
+  { key: "Draft", label: "Drafts" },
 ]
 
 export function ESignScreen() {
@@ -54,6 +55,7 @@ export function ESignScreen() {
   const [newForm, setNewForm] = useState({ document_name: "", client_name: "", document_type: "Indemnity Agreement", send_via: "Email" })
   const [creating, setCreating] = useState(false)
   const [resendingId, setResendingId] = useState<number | null>(null)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
   const load = async (quiet = false) => {
     if (!identity) return
@@ -75,7 +77,11 @@ export function ESignScreen() {
   const applyFilters = (q: string, status: string, source = docs) => {
     let out = source
     if (status !== "all") {
-      out = out.filter((d) => mapStatus(d.status ?? "") === status)
+      if (status === "Draft") {
+        out = out.filter((d) => (d.status ?? "").toLowerCase() === "draft")
+      } else {
+        out = out.filter((d) => mapStatus(d.status ?? "") === status)
+      }
     }
     if (q.trim()) {
       const lq = q.toLowerCase()
@@ -85,6 +91,25 @@ export function ESignScreen() {
       )
     }
     setFiltered(out)
+  }
+
+  const handleVoid = (item: any) => {
+    if (!identity) return
+    Alert.alert("Void Document", `Void "${item.document_name ?? item.name ?? "this document"}"?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Void", style: "destructive", onPress: async () => {
+          try {
+            await apiPatch("esign/documents/" + item.id + "/", identity, { status: "voided" })
+            const updated = docs.map((d) => d.id === item.id ? { ...d, status: "voided" } : d)
+            setDocs(updated)
+            applyFilters(query, statusFilter, updated)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not void document")
+          }
+        }
+      },
+    ])
   }
 
   const handleCreate = async () => {
@@ -134,6 +159,7 @@ export function ESignScreen() {
   const totalAwaiting = docs.filter((d) => mapStatus(d.status ?? "") === "Awaiting").length
   const totalSigned = docs.filter((d) => mapStatus(d.status ?? "") === "Signed").length
   const totalExpired = docs.filter((d) => mapStatus(d.status ?? "") === "Expired").length
+  const totalDrafts = docs.filter((d) => (d.status ?? "").toLowerCase() === "draft").length
 
   const kpis = [
     { label: "Total", value: String(docs.length), color: Colors.text },
@@ -187,15 +213,26 @@ export function ESignScreen() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
-        {FILTER_TABS.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            style={[s.tab, statusFilter === t.key && s.tabActive]}
-            onPress={() => { setStatusFilter(t.key); applyFilters(query, t.key) }}
-          >
-            <Text style={[s.tabText, statusFilter === t.key && s.tabTextActive]}>{t.label}</Text>
-          </TouchableOpacity>
-        ))}
+        {FILTER_TABS.map((t) => {
+          const isDrafts = t.key === "Draft"
+          const showBadge = isDrafts && totalDrafts > 0
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[s.tab, statusFilter === t.key && s.tabActive]}
+              onPress={() => { setStatusFilter(t.key); applyFilters(query, t.key) }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Text style={[s.tabText, statusFilter === t.key && s.tabTextActive]}>{t.label}</Text>
+                {showBadge && (
+                  <View style={[s.tabBadge, statusFilter === t.key && { backgroundColor: Colors.mutedDim + "40" }]}>
+                    <Text style={s.tabBadgeText}>{totalDrafts}</Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+          )
+        })}
       </ScrollView>
 
       {loading ? (
@@ -224,46 +261,88 @@ export function ESignScreen() {
             const signedAt = item.signed_at ?? item.completed_at ?? ""
             const docType = item.document_type ?? ""
             const isAwaiting = displayStatus === "Awaiting"
+            const isSigned = displayStatus === "Signed"
+            const caseNumber = item.case_number ?? item.bond_number ?? ""
+            const bondAmount = item.bond_amount ?? item.face_amount ?? null
+            const isExpanded = expandedId === item.id
 
             return (
               <View style={s.card}>
-                <View style={s.cardTop}>
-                  <View style={s.docIcon}>
-                    <Ionicons name="document-text-outline" size={20} color={Colors.blue} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.docName}>{docName}</Text>
-                    {!!clientName && <Text style={s.clientName}>{clientName}</Text>}
-                    {!!county && <Text style={s.countyText}>{county}</Text>}
-                  </View>
-                  <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
-                    <Ionicons name={sc.icon as any} size={10} color={sc.text} />
-                    <Text style={[s.statusText, { color: sc.text }]}>{displayStatus}</Text>
-                  </View>
-                </View>
-
-                {!!docType && (
-                  <View style={s.docTypeRow}>
-                    <View style={s.docTypeChip}>
-                      <Text style={s.docTypeText}>{docType}</Text>
+                <TouchableOpacity activeOpacity={0.85} onPress={() => setExpandedId(isExpanded ? null : item.id)}>
+                  <View style={s.cardTop}>
+                    <View style={s.docIcon}>
+                      <Ionicons name="document-text-outline" size={20} color={Colors.blue} />
                     </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.docName}>{docName}</Text>
+                      {!!clientName && <Text style={s.clientName}>{clientName}</Text>}
+                      {!!county && <Text style={s.countyText}>{county}</Text>}
+                    </View>
+                    <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                      <Ionicons name={sc.icon as any} size={10} color={sc.text} />
+                      <Text style={[s.statusText, { color: sc.text }]}>{displayStatus}</Text>
+                    </View>
+                    <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color={Colors.mutedDim} />
+                  </View>
+
+                  {!!docType && (
+                    <View style={s.docTypeRow}>
+                      <View style={s.docTypeChip}>
+                        <Text style={s.docTypeText}>{docType}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  <View style={s.metaRow}>
+                    {!!dateSent && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="send-outline" size={11} color={Colors.mutedDim} />
+                        <Text style={s.metaText}>Sent {fmtDate(dateSent)}</Text>
+                      </View>
+                    )}
+                    {isSigned && !!signedAt && (
+                      <View style={s.metaItem}>
+                        <Ionicons name="checkmark-outline" size={11} color={Colors.green} />
+                        <Text style={[s.metaText, { color: Colors.green }]}>Signed: {fmtDate(signedAt)}</Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+
+                {isExpanded && (
+                  <View style={s.expandedSection}>
+                    {!!docType && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Document Type</Text>
+                        <Text style={s.expandValue}>{docType}</Text>
+                      </View>
+                    )}
+                    {!!dateSent && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Date Sent</Text>
+                        <Text style={s.expandValue}>{fmtDate(dateSent)}</Text>
+                      </View>
+                    )}
+                    {!!signedAt && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Signed At</Text>
+                        <Text style={s.expandValue}>{fmtDate(signedAt)}</Text>
+                      </View>
+                    )}
+                    {!!caseNumber && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Case #</Text>
+                        <Text style={s.expandValue}>{caseNumber}</Text>
+                      </View>
+                    )}
+                    {bondAmount != null && (
+                      <View style={s.expandRow}>
+                        <Text style={s.expandLabel}>Bond Amount</Text>
+                        <Text style={s.expandValue}>${parseFloat(String(bondAmount)).toLocaleString("en-US")}</Text>
+                      </View>
+                    )}
                   </View>
                 )}
-
-                <View style={s.metaRow}>
-                  {!!dateSent && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="send-outline" size={11} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>Sent {fmtDate(dateSent)}</Text>
-                    </View>
-                  )}
-                  {!!signedAt && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="checkmark-outline" size={11} color={Colors.green} />
-                      <Text style={[s.metaText, { color: Colors.green }]}>Signed {fmtDate(signedAt)}</Text>
-                    </View>
-                  )}
-                </View>
 
                 <View style={s.cardFooter}>
                   <TouchableOpacity style={s.footerAction} onPress={() => handleViewSign(item)}>
@@ -281,6 +360,12 @@ export function ESignScreen() {
                         : <Ionicons name="mail-outline" size={14} color={Colors.gold} />
                       }
                       <Text style={[s.footerActionText, { color: Colors.gold }]}>Resend</Text>
+                    </TouchableOpacity>
+                  )}
+                  {isAwaiting && (
+                    <TouchableOpacity style={[s.footerAction, { marginLeft: "auto" }]} onPress={() => handleVoid(item)}>
+                      <Ionicons name="close-circle-outline" size={14} color={Colors.red} />
+                      <Text style={[s.footerActionText, { color: Colors.red }]}>Void</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -373,7 +458,7 @@ const s = StyleSheet.create({
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
   kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
-  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center", color: Colors.mutedDim },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -382,6 +467,8 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
   tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
   tabTextActive: { color: Colors.text },
+  tabBadge: { backgroundColor: Colors.mutedDim + "28", borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1 },
+  tabBadgeText: { fontSize: 9, color: Colors.mutedDim, fontFamily: Font.bold },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   emptyText: { fontSize: FontSize.sm, color: Colors.mutedDim },
@@ -400,6 +487,10 @@ const s = StyleSheet.create({
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
+  expandedSection: { borderTopWidth: 1, borderTopColor: Colors.borderFaint, paddingTop: Spacing.md, marginTop: Spacing.sm, gap: 8 },
+  expandRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  expandLabel: { fontSize: FontSize.xs, color: Colors.mutedDim, fontFamily: Font.semibold },
+  expandValue: { fontSize: FontSize.xs, color: Colors.text, fontFamily: Font.semibold, flexShrink: 1, textAlign: "right" },
   cardFooter: { flexDirection: "row", alignItems: "center", gap: 4, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },

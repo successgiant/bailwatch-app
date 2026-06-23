@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Modal, KeyboardAvoidingView, Platform, Linking } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -6,6 +6,12 @@ import { useNavigation } from "@react-navigation/native"
 import { useAuth } from "../context/AuthContext"
 import { api } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
+
+function fmtDate(d: string): string {
+  if (!d) return "—"
+  try { return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) }
+  catch { return d }
+}
 
 export function CountyCoverageScreen() {
   const navigation = useNavigation()
@@ -18,6 +24,7 @@ export function CountyCoverageScreen() {
   const [showRequest, setShowRequest] = useState(false)
   const [requestForm, setRequestForm] = useState({ county_name: "", state: "", notes: "" })
   const [requesting, setRequesting] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const load = async (quiet = false) => {
     if (!identity) return
@@ -41,7 +48,11 @@ export function CountyCoverageScreen() {
     if (!requestForm.county_name.trim()) { Alert.alert("Required", "Please enter the county name."); return }
     setRequesting(true)
     try {
-      await api.requestCounty(identity, requestForm)
+      await api.requestCounty(identity, {
+        county: requestForm.county_name,
+        state: requestForm.state,
+        notes: requestForm.notes,
+      })
       setShowRequest(false)
       setRequestForm({ county_name: "", state: "", notes: "" })
       Alert.alert("Request Submitted", "Your county coverage request has been submitted for review.")
@@ -49,6 +60,28 @@ export function CountyCoverageScreen() {
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Could not submit request")
     } finally { setRequesting(false) }
+  }
+
+  const handleDelete = (item: any) => {
+    if (!identity) return
+    const name = item.county_name ?? item.name ?? item.county ?? "this county"
+    Alert.alert("Remove County", `Remove ${name} from your coverage list?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove", style: "destructive", onPress: async () => {
+          setDeletingId(item.id)
+          try {
+            await api.deleteCounty(identity, item.id)
+            const updated = counties.filter((c) => c.id !== item.id)
+            setCounties(updated)
+            const q = query.toLowerCase()
+            setFiltered(q ? updated.filter(c => (c.county_name ?? c.name ?? c.county ?? "").toLowerCase().includes(q)) : updated)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not remove county")
+          } finally { setDeletingId(null) }
+        }
+      },
+    ])
   }
 
   const handleSearch = (text: string) => {
@@ -111,11 +144,24 @@ export function CountyCoverageScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => String(item.id ?? Math.random())}
-          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}
+          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 16 }}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={Colors.blue} />}
           ListEmptyComponent={<Text style={s.empty}>No counties assigned.</Text>}
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+          ListFooterComponent={
+            <TouchableOpacity
+              style={s.supportCard}
+              onPress={() => Linking.openURL("mailto:support@bailwatchpro.com").catch(() => {})}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="mail-outline" size={16} color={Colors.blue} />
+              <Text style={s.supportText}>
+                Questions about county coverage? Contact support at{" "}
+                <Text style={s.supportEmail}>support@bailwatchpro.com</Text>
+              </Text>
+            </TouchableOpacity>
+          }
           renderItem={({ item }) => {
             const name = item.county_name ?? item.name ?? item.county ?? "Unknown"
             const state = item.state ?? ""
@@ -123,6 +169,9 @@ export function CountyCoverageScreen() {
             const isActive = status.toLowerCase() === "active"
             const clients = item.client_count ?? item.clients ?? 0
             const bonds = item.bond_count ?? item.bonds ?? 0
+            const requestedAt = item.requested_at ?? item.created_at ?? ""
+            const isDeleting = deletingId === item.id
+
             return (
               <View style={s.card}>
                 <View style={s.cardTop}>
@@ -132,10 +181,23 @@ export function CountyCoverageScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={s.countyName}>{name}</Text>
                     {!!state && <Text style={s.stateName}>{state}</Text>}
+                    {!!requestedAt && (
+                      <Text style={s.requestedAt}>Requested: {fmtDate(requestedAt)}</Text>
+                    )}
                   </View>
                   <View style={[s.badge, { backgroundColor: isActive ? Colors.green + "22" : Colors.gold + "22" }]}>
                     <Text style={[s.badgeText, { color: isActive ? Colors.green : Colors.gold }]}>{status}</Text>
                   </View>
+                  <TouchableOpacity
+                    style={s.deleteBtn}
+                    onPress={() => handleDelete(item)}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting
+                      ? <ActivityIndicator size="small" color={Colors.red} />
+                      : <Ionicons name="trash-outline" size={16} color={Colors.red} />
+                    }
+                  </TouchableOpacity>
                 </View>
                 {isActive && (clients > 0 || bonds > 0) && (
                   <View style={s.countyMeta}>
@@ -155,11 +217,12 @@ export function CountyCoverageScreen() {
           }}
         />
       )}
+
       <Modal visible={showRequest} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
             <View style={s.modalCard}>
-                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
               <View style={s.modalHeader}>
                 <Text style={s.modalTitle}>Request County Coverage</Text>
                 <TouchableOpacity onPress={() => setShowRequest(false)}>
@@ -176,10 +239,17 @@ export function CountyCoverageScreen() {
               </View>
               <View style={s.field}>
                 <Text style={s.fieldLabel}>Notes</Text>
-                <TextInput style={[s.fieldInput, { height: 80, textAlignVertical: "top" }]} value={requestForm.notes} onChangeText={(v) => setRequestForm((f) => ({ ...f, notes: v }))} placeholder="Reason for request..." placeholderTextColor={Colors.mutedDim} multiline />
+                <TextInput
+                  style={[s.fieldInput, { height: 80, textAlignVertical: "top" }]}
+                  value={requestForm.notes}
+                  onChangeText={(v) => setRequestForm((f) => ({ ...f, notes: v }))}
+                  placeholder="Reason for request..."
+                  placeholderTextColor={Colors.mutedDim}
+                  multiline
+                />
               </View>
               <TouchableOpacity style={[s.submitBtn, requesting && { opacity: 0.6 }]} onPress={handleRequest} disabled={requesting}>
-                {requesting ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Submit Request</Text>}
+                {requesting ? <ActivityIndicator size="small" color={Colors.text} /> : <Text style={s.submitBtnText}>Submit Request</Text>}
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
@@ -209,12 +279,17 @@ const s = StyleSheet.create({
   mapIcon: { width: 40, height: 40, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
   countyName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
   stateName: { fontSize: FontSize.xs, color: Colors.mutedDim },
+  requestedAt: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 2 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
   badgeText: { fontSize: 10, fontFamily: Font.bold },
+  deleteBtn: { width: 30, height: 30, borderRadius: Radius.sm, backgroundColor: Colors.red + "12", alignItems: "center", justifyContent: "center" },
   countyMeta: { flexDirection: "row", gap: Spacing.lg, paddingLeft: 52 },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.mutedDim },
   pendingNote: { fontSize: FontSize.xs, color: Colors.gold, paddingLeft: 52, fontStyle: "italic" },
+  supportCard: { flexDirection: "row", alignItems: "flex-start", gap: 10, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, marginTop: Spacing.lg },
+  supportText: { flex: 1, fontSize: FontSize.xs, color: Colors.muted, lineHeight: 18 },
+  supportEmail: { color: Colors.blue, fontFamily: Font.semibold },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
   modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
@@ -223,5 +298,5 @@ const s = StyleSheet.create({
   fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
   fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
   submitBtn: { height: 52, borderRadius: Radius.lg, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center", marginTop: Spacing.md },
-  submitBtnText: { color: "#fff", fontSize: FontSize.md, fontFamily: Font.bold },
+  submitBtnText: { color: Colors.text, fontSize: FontSize.md, fontFamily: Font.bold },
 })

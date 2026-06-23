@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
 import { useNavigation } from "@react-navigation/native"
 import { useAuth } from "../context/AuthContext"
-import { api } from "../lib/api"
+import { api, apiPatch } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
 function fmtMoney(v: any): string {
@@ -24,6 +24,8 @@ const ROLE_BADGE: Record<string, { bg: string; text: string }> = {
 }
 
 const INVITE_ROLES = ["Agent", "Senior Agent", "Manager", "Owner"]
+const STATUS_FILTERS = ["All", "Active", "Inactive"]
+const ROLE_FILTERS = ["All", "Agent", "Manager", "Owner"]
 
 export function BondTeamScreen() {
   const navigation = useNavigation()
@@ -32,12 +34,20 @@ export function BondTeamScreen() {
   const [agentStats, setAgentStats] = useState<any[]>([])
   const [filtered, setFiltered] = useState<any[]>([])
   const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("All")
+  const [roleFilter, setRoleFilter] = useState("All")
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showInvite, setShowInvite] = useState(false)
   const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "Agent", phone: "" })
   const [inviting, setInviting] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+
+  // Edit state
+  const [showEdit, setShowEdit] = useState(false)
+  const [editTarget, setEditTarget] = useState<any | null>(null)
+  const [editForm, setEditForm] = useState({ name: "", email: "", phone: "", role: "Agent", status: "Active" })
+  const [saving, setSaving] = useState(false)
 
   const load = async (quiet = false) => {
     if (!identity) return
@@ -50,7 +60,7 @@ export function BondTeamScreen() {
       const list = teamRes?.results ?? teamRes?.data ?? teamRes
       const arr = Array.isArray(list) ? list : []
       setTeam(arr)
-      applySearch(query, arr)
+      applyFilters(query, statusFilter, roleFilter, arr)
       const statsArr = statsRes?.results ?? statsRes?.data ?? statsRes
       setAgentStats(Array.isArray(statsArr) ? statsArr : [])
     } catch {} finally {
@@ -61,13 +71,66 @@ export function BondTeamScreen() {
 
   useEffect(() => { load() }, [identity])
 
-  const applySearch = (text: string, source: any[] = team) => {
-    if (!text.trim()) { setFiltered(source); return }
-    const q = text.toLowerCase()
-    setFiltered(source.filter((m) =>
-      (m.name ?? m.full_name ?? m.username ?? "").toLowerCase().includes(q) ||
-      (m.email ?? "").toLowerCase().includes(q)
-    ))
+  const applyFilters = (text: string, sFilter: string, rFilter: string, source: any[] = team) => {
+    let out = source
+    if (sFilter !== "All") {
+      out = out.filter((m) => {
+        const status = m.status ?? (m.is_active !== false ? "Active" : "Inactive")
+        return status === sFilter
+      })
+    }
+    if (rFilter !== "All") {
+      out = out.filter((m) => {
+        const role = m.role ?? "Agent"
+        if (rFilter === "Manager") return role === "Manager" || role === "Senior Agent"
+        return role === rFilter
+      })
+    }
+    if (text.trim()) {
+      const q = text.toLowerCase()
+      out = out.filter((m) =>
+        (m.name ?? m.full_name ?? m.username ?? "").toLowerCase().includes(q) ||
+        (m.email ?? "").toLowerCase().includes(q)
+      )
+    }
+    setFiltered(out)
+  }
+
+  const openEdit = (member: any) => {
+    setEditTarget(member)
+    setEditForm({
+      name: member.name ?? member.full_name ?? member.username ?? "",
+      email: member.email ?? "",
+      phone: member.telephone ?? member.phone ?? "",
+      role: member.role ?? "Agent",
+      status: member.status ?? (member.is_active !== false ? "Active" : "Inactive"),
+    })
+    setShowEdit(true)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!identity || !editTarget) return
+    setSaving(true)
+    try {
+      await apiPatch("team/" + editTarget.id + "/", identity, {
+        name: editForm.name,
+        email: editForm.email,
+        telephone: editForm.phone,
+        role: editForm.role,
+        status: editForm.status,
+      })
+      const updated = team.map((m) =>
+        m.id === editTarget.id
+          ? { ...m, name: editForm.name, email: editForm.email, telephone: editForm.phone, role: editForm.role, status: editForm.status }
+          : m
+      )
+      setTeam(updated)
+      applyFilters(query, statusFilter, roleFilter, updated)
+      setShowEdit(false)
+      setEditTarget(null)
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not update member")
+    } finally { setSaving(false) }
   }
 
   const handleInvite = async () => {
@@ -95,17 +158,19 @@ export function BondTeamScreen() {
     const name = member.name ?? member.full_name ?? member.username ?? "this member"
     Alert.alert("Remove Member", `Remove ${name} from the team?`, [
       { text: "Cancel", style: "cancel" },
-      { text: "Remove", style: "destructive", onPress: async () => {
-        setDeletingId(member.id)
-        try {
-          await api.deleteTeamMember(identity, member.id)
-          const updated = team.filter((m) => m.id !== member.id)
-          setTeam(updated)
-          applySearch(query, updated)
-        } catch (e: any) {
-          Alert.alert("Error", e?.message ?? "Could not remove member")
-        } finally { setDeletingId(null) }
-      }},
+      {
+        text: "Remove", style: "destructive", onPress: async () => {
+          setDeletingId(member.id)
+          try {
+            await api.deleteTeamMember(identity, member.id)
+            const updated = team.filter((m) => m.id !== member.id)
+            setTeam(updated)
+            applyFilters(query, statusFilter, roleFilter, updated)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not remove member")
+          } finally { setDeletingId(null) }
+        }
+      },
     ])
   }
 
@@ -157,8 +222,31 @@ export function BondTeamScreen() {
 
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
-        <TextInput style={s.searchInput} placeholder="Search team..." placeholderTextColor={Colors.mutedDim} value={query} onChangeText={(t) => { setQuery(t); applySearch(t) }} />
+        <TextInput style={s.searchInput} placeholder="Search team..." placeholderTextColor={Colors.mutedDim} value={query} onChangeText={(t) => { setQuery(t); applyFilters(t, statusFilter, roleFilter) }} />
       </View>
+
+      {/* Status filter */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterScroll} contentContainerStyle={s.filterRow}>
+        {STATUS_FILTERS.map((f) => (
+          <TouchableOpacity
+            key={f}
+            style={[s.filterChip, statusFilter === f && s.filterChipActive]}
+            onPress={() => { setStatusFilter(f); applyFilters(query, f, roleFilter) }}
+          >
+            <Text style={[s.filterChipText, statusFilter === f && s.filterChipTextActive]}>{f}</Text>
+          </TouchableOpacity>
+        ))}
+        <View style={s.filterDivider} />
+        {ROLE_FILTERS.map((f) => (
+          <TouchableOpacity
+            key={"role-" + f}
+            style={[s.filterChip, roleFilter === f && s.filterChipActiveRole]}
+            onPress={() => { setRoleFilter(f); applyFilters(query, statusFilter, f) }}
+          >
+            <Text style={[s.filterChipText, roleFilter === f && s.filterChipTextActive]}>{f}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
       {loading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -227,6 +315,9 @@ export function BondTeamScreen() {
                 <View style={s.footer}>
                   <View style={{ flex: 1 }} />
                   <View style={s.actions}>
+                    <TouchableOpacity style={[s.actionBtn, { backgroundColor: Colors.blue + "12" }]} onPress={() => openEdit(item)}>
+                      <Ionicons name="pencil-outline" size={16} color={Colors.blue} />
+                    </TouchableOpacity>
                     <TouchableOpacity style={[s.actionBtn, { backgroundColor: Colors.red + "12" }]} onPress={() => handleDelete(item)} disabled={deletingId === item.id}>
                       {deletingId === item.id
                         ? <ActivityIndicator size="small" color={Colors.red} />
@@ -241,6 +332,7 @@ export function BondTeamScreen() {
         />
       )}
 
+      {/* Invite Modal */}
       <Modal visible={showInvite} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
@@ -281,6 +373,60 @@ export function BondTeamScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Edit Modal */}
+      <Modal visible={showEdit} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <ScrollView>
+              <View style={s.modalCard}>
+                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+                <View style={s.modalHeader}>
+                  <Text style={s.modalTitle}>Edit Member</Text>
+                  <TouchableOpacity onPress={() => setShowEdit(false)}>
+                    <Ionicons name="close" size={22} color={Colors.muted} />
+                  </TouchableOpacity>
+                </View>
+                <View style={s.field}>
+                  <Text style={s.fieldLabel}>Full Name</Text>
+                  <TextInput style={s.fieldInput} value={editForm.name} onChangeText={(v) => setEditForm((f) => ({ ...f, name: v }))} placeholder="Full name" placeholderTextColor={Colors.mutedDim} />
+                </View>
+                <View style={s.field}>
+                  <Text style={s.fieldLabel}>Email</Text>
+                  <TextInput style={s.fieldInput} value={editForm.email} onChangeText={(v) => setEditForm((f) => ({ ...f, email: v }))} placeholder="agent@example.com" placeholderTextColor={Colors.mutedDim} keyboardType="email-address" autoCapitalize="none" />
+                </View>
+                <View style={s.field}>
+                  <Text style={s.fieldLabel}>Phone</Text>
+                  <TextInput style={s.fieldInput} value={editForm.phone} onChangeText={(v) => setEditForm((f) => ({ ...f, phone: v }))} placeholder="(555) 123-4567" placeholderTextColor={Colors.mutedDim} keyboardType="phone-pad" />
+                </View>
+                <View style={s.field}>
+                  <Text style={s.fieldLabel}>Role</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                    {INVITE_ROLES.map((r) => (
+                      <TouchableOpacity key={r} style={[s.typeChip, editForm.role === r && s.typeChipActive]} onPress={() => setEditForm((f) => ({ ...f, role: r }))}>
+                        <Text style={[s.typeChipText, editForm.role === r && { color: Colors.text }]}>{r}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+                <View style={s.field}>
+                  <Text style={s.fieldLabel}>Status</Text>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {["Active", "Inactive"].map((st) => (
+                      <TouchableOpacity key={st} style={[s.typeChip, editForm.status === st && s.typeChipActive]} onPress={() => setEditForm((f) => ({ ...f, status: st }))}>
+                        <Text style={[s.typeChipText, editForm.status === st && { color: Colors.text }]}>{st}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+                <TouchableOpacity style={[s.submitBtn, saving && { opacity: 0.6 }]} onPress={handleSaveEdit} disabled={saving}>
+                  {saving ? <ActivityIndicator size="small" color={Colors.text} /> : <Text style={s.submitBtnText}>Save Changes</Text>}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -296,8 +442,16 @@ const s = StyleSheet.create({
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
   kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
   kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center", color: Colors.mutedDim },
-  searchWrap: { flexDirection: "row", alignItems: "center", marginHorizontal: Spacing.xl, marginBottom: Spacing.lg, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 42, gap: Spacing.sm },
+  searchWrap: { flexDirection: "row", alignItems: "center", marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 42, gap: Spacing.sm },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.md },
+  filterScroll: { marginBottom: Spacing.md, height: 38 },
+  filterRow: { paddingHorizontal: Spacing.xl, gap: 8, alignItems: "center" },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  filterChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  filterChipActiveRole: { backgroundColor: Colors.purple, borderColor: Colors.purple },
+  filterChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
+  filterChipTextActive: { color: Colors.text },
+  filterDivider: { width: 1, height: 20, backgroundColor: Colors.border, marginHorizontal: 4 },
   empty: { textAlign: "center", color: Colors.mutedDim, marginTop: 40, fontSize: FontSize.md },
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.sm },

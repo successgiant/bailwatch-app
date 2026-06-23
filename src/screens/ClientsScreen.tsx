@@ -2,9 +2,13 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Activity
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack"
 import { useAuth } from "../context/AuthContext"
 import { api } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
+
+type NavProp = NativeStackNavigationProp<any>
 
 function fmtMoney(v: any): string {
   const n = parseFloat(String(v ?? "0").replace(/[$,]/g, ""))
@@ -65,6 +69,7 @@ const SORT_LABELS: Record<SortOption, string> = {
 }
 
 export function ClientsScreen() {
+  const navigation = useNavigation<NavProp>()
   const { identity } = useAuth()
   const [clients, setClients] = useState<any[]>([])
   const [filtered, setFiltered] = useState<any[]>([])
@@ -257,7 +262,11 @@ export function ClientsScreen() {
             const lp = item.last_payment
 
             return (
-              <TouchableOpacity style={s.card} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={s.card}
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate("More" as any, { screen: "ClientDetail", params: { client: item } })}
+              >
                 <View style={s.cardTop}>
                   <View style={[s.avatar, { backgroundColor: acColor + "22" }]}>
                     <Text style={[s.avatarText, { color: acColor }]}>{initials}</Text>

@@ -17,6 +17,8 @@ const MENU_SECTIONS = [
       { icon: "document-text-outline" as const, label: "Bond Applications", screen: "BondApp", color: Colors.purple },
       { icon: "create-outline" as const, label: "eSign Documents", screen: "ESign", color: Colors.gold },
       { icon: "briefcase-outline" as const, label: "Powers of Attorney", screen: "Powers", color: Colors.blueBright },
+      { icon: "document-outline" as const, label: "Documents & Files", screen: "Documents", color: Colors.blueLight },
+      { icon: "chatbubbles-outline" as const, label: "Communications", screen: "Messages", color: Colors.emerald },
     ],
   },
   {

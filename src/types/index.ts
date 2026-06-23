@@ -21,4 +21,6 @@ export type MoreStackParamList = {
   Messages: undefined
   CountyCoverage: undefined
   BondTrack: undefined
+  Documents: undefined
+  ClientDetail: { client?: any; clientId?: string | number }
 }

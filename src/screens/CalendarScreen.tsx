@@ -3,16 +3,8 @@ import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
 import { useAuth } from "../context/AuthContext"
-import { api } from "../lib/api"
+import { api, apiPatch } from "../lib/api"
 import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
-
-function fmtDate(d: string): string {
-  if (!d) return "—"
-  try {
-    const dt = new Date(d)
-    return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
-  } catch { return d }
-}
 
 function fmtTime(t: string): string {
   if (!t) return ""
@@ -64,18 +56,44 @@ export function CalendarScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState({
-    client_name: "",
-    court_date: "",
-    court_time: "",
-    court_name: "",
-    county: "",
-    event_type: "Court Date",
-    judge: "",
-    address: "",
-    notes: "",
+    client_name: "", court_date: "", court_time: "", court_name: "",
+    county: "", event_type: "Court Date", judge: "", address: "", notes: "",
   })
   const [adding, setAdding] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [completingId, setCompletingId] = useState<number | null>(null)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [showReschedule, setShowReschedule] = useState(false)
+  const [rescheduleItem, setRescheduleItem] = useState<any>(null)
+  const [rescheduleDate, setRescheduleDate] = useState("")
+  const [rescheduleTime, setRescheduleTime] = useState("")
+  const [rescheduling, setRescheduling] = useState(false)
+
+  const getEventDate = (item: any) => item.event_date ?? item.court_date ?? item.date ?? ""
+  const getEventStatus = (item: any): string => {
+    if (item.status) return item.status
+    const days = daysUntil(getEventDate(item))
+    if (days === 0) return "today"
+    if (days < 0) return "missed"
+    return "upcoming"
+  }
+
+  const applyFilter = (filter: string, source = events) => {
+    const td = todayStr()
+    let out = source
+    if (filter === "today") {
+      out = source.filter((e) => getEventDate(e).slice(0, 10) === td)
+    } else if (filter === "upcoming") {
+      out = source.filter((e) => {
+        const d = getEventDate(e).slice(0, 10)
+        return d >= td && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
+      })
+    } else if (filter === "missed") {
+      out = source.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < td && (e.status ?? "") !== "completed"))
+    }
+    setFiltered(out)
+    setActiveFilter(filter)
+  }
 
   const load = async (quiet = false) => {
     if (!identity) return
@@ -84,7 +102,9 @@ export function CalendarScreen() {
       const res: any = await api.courtDates(identity, { page_size: "50" })
       const raw = res?.data ?? res?.results ?? res
       const arr = Array.isArray(raw) ? raw : []
-      const sorted = arr.sort((a: any, b: any) => new Date(a.event_date ?? a.court_date ?? a.date ?? "").getTime() - new Date(b.event_date ?? b.court_date ?? b.date ?? "").getTime())
+      const sorted = arr.sort((a: any, b: any) =>
+        new Date(getEventDate(a)).getTime() - new Date(getEventDate(b)).getTime()
+      )
       setEvents(sorted)
       applyFilter(activeFilter, sorted)
     } catch {} finally {
@@ -102,11 +122,7 @@ export function CalendarScreen() {
     }
     setAdding(true)
     try {
-      const payload = {
-        ...addForm,
-        court: addForm.court_name,
-      }
-      await api.createCourtDate(identity, payload)
+      await api.createCourtDate(identity, { ...addForm, court: addForm.court_name })
       setShowAdd(false)
       setAddForm({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", event_type: "Court Date", judge: "", address: "", notes: "" })
       load()
@@ -133,39 +149,72 @@ export function CalendarScreen() {
     ])
   }
 
-  const getEventDate = (item: any) => item.event_date ?? item.court_date ?? item.date ?? ""
-  const getEventStatus = (item: any): string => {
-    if (item.status) return item.status
-    const days = daysUntil(getEventDate(item))
-    if (days === 0) return "today"
-    if (days < 0) return "upcoming"
-    return "upcoming"
+  const handleMarkCompleted = (item: any) => {
+    if (!identity) return
+    Alert.alert(
+      "Mark as Completed",
+      `Mark court date for ${item.defendant_name ?? item.client_name ?? item.name ?? "client"} as completed?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Complete", onPress: async () => {
+          setCompletingId(item.id)
+          try {
+            await apiPatch("calendar/events/" + item.id + "/", identity, { status: "completed" })
+            const updated = events.map((e) => e.id === item.id ? { ...e, status: "completed" } : e)
+            setEvents(updated)
+            applyFilter(activeFilter, updated)
+          } catch (e: any) {
+            Alert.alert("Error", e?.message ?? "Could not update")
+          } finally { setCompletingId(null) }
+        }},
+      ]
+    )
   }
 
-  const applyFilter = (filter: string, source = events) => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const td = todayStr()
-    let out = source
-    if (filter === "today") {
-      out = source.filter((e) => getEventDate(e).slice(0, 10) === td)
-    } else if (filter === "upcoming") {
-      out = source.filter((e) => {
-        const d = getEventDate(e).slice(0, 10)
-        return d >= td && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
-      })
-    } else if (filter === "missed") {
-      out = source.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < td && (e.status ?? "") !== "completed"))
+  const handleSendReminder = (_item: any) => {
+    Alert.alert("Reminder Sent", "A reminder has been sent for this court date.")
+  }
+
+  const openReschedule = (item: any) => {
+    setRescheduleItem(item)
+    setRescheduleDate("")
+    setRescheduleTime("")
+    setShowReschedule(true)
+  }
+
+  const handleReschedule = async () => {
+    if (!identity || !rescheduleItem) return
+    if (!rescheduleDate.trim()) {
+      Alert.alert("Required", "Please enter a new date (YYYY-MM-DD)."); return
     }
-    setFiltered(out)
-    setActiveFilter(filter)
+    setRescheduling(true)
+    try {
+      await apiPatch("calendar/events/" + rescheduleItem.id + "/", identity, {
+        event_date: rescheduleDate,
+        ...(rescheduleTime.trim() ? { event_time: rescheduleTime } : {}),
+        status: "upcoming",
+      })
+      const updated = events.map((e) =>
+        e.id === rescheduleItem.id
+          ? { ...e, event_date: rescheduleDate, ...(rescheduleTime.trim() ? { event_time: rescheduleTime } : {}), status: "upcoming" }
+          : e
+      )
+      setEvents(updated)
+      applyFilter(activeFilter, updated)
+      setShowReschedule(false)
+      setRescheduleItem(null)
+    } catch (e: any) {
+      Alert.alert("Error", e?.message ?? "Could not reschedule")
+    } finally { setRescheduling(false) }
   }
 
-  const todayCount = events.filter((e) => getEventDate(e).slice(0, 10) === todayStr()).length
+  const td = todayStr()
+  const todayCount = events.filter((e) => getEventDate(e).slice(0, 10) === td).length
   const upcomingCount = events.filter((e) => {
     const d = getEventDate(e).slice(0, 10)
-    return d >= todayStr() && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
+    return d >= td && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
   }).length
-  const missedCount = events.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < todayStr() && (e.status ?? "") !== "completed")).length
+  const missedCount = events.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < td && (e.status ?? "") !== "completed")).length
 
   const kpis = [
     { label: "Today", value: String(todayCount), color: Colors.red },
@@ -208,20 +257,14 @@ export function CalendarScreen() {
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
         {filterTabs.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            style={[s.tab, activeFilter === t.key && s.tabActive]}
-            onPress={() => applyFilter(t.key)}
-          >
+          <TouchableOpacity key={t.key} style={[s.tab, activeFilter === t.key && s.tabActive]} onPress={() => applyFilter(t.key)}>
             <Text style={[s.tabText, activeFilter === t.key && s.tabTextActive]}>{t.label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
       {loading ? (
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={Colors.blue} />
-        </View>
+        <View style={s.center}><ActivityIndicator size="large" color={Colors.blue} /></View>
       ) : (
         <FlatList
           data={filtered}
@@ -250,6 +293,11 @@ export function CalendarScreen() {
             const days = daysUntil(dateStr)
             const judge = item.judge ?? ""
             const address = item.address ?? ""
+            const notes = item.notes ?? ""
+            const charges: any[] = Array.isArray(item.charges) ? item.charges : Array.isArray(item.all_charges) ? item.all_charges : []
+            const isCompleted = itemStatus === "completed"
+            const isExpanded = expandedId === item.id
+            const hasDetail = !!(judge || address || notes || charges.length)
 
             let urgencyColor = Colors.mutedDim
             let urgencyText = ""
@@ -260,80 +308,112 @@ export function CalendarScreen() {
 
             return (
               <View style={[s.card, days === 0 && s.cardToday, days === 1 && s.cardTomorrow, itemStatus === "missed" && s.cardMissed]}>
-                <View style={s.cardTop}>
-                  <View style={s.dateBox}>
-                    {dateStr ? (
-                      <>
-                        <Text style={s.dateMonth}>{new Date(dateStr).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}</Text>
-                        <Text style={[s.dateDay, days <= 1 && days >= 0 && { color: urgencyColor }]}>
-                          {new Date(dateStr).getDate()}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={s.dateTbd}>TBD</Text>
-                    )}
+                {/* Card body — tapping toggles expanded detail */}
+                <TouchableOpacity activeOpacity={0.7} onPress={() => hasDetail && setExpandedId(isExpanded ? null : item.id)}>
+                  <View style={s.cardTop}>
+                    <View style={s.dateBox}>
+                      {dateStr ? (
+                        <>
+                          <Text style={s.dateMonth}>{new Date(dateStr).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}</Text>
+                          <Text style={[s.dateDay, days <= 1 && days >= 0 && { color: urgencyColor }]}>
+                            {new Date(dateStr).getDate()}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={s.dateTbd}>TBD</Text>
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.clientName}>{name}</Text>
+                      {!!courtName && <Text style={s.courtName}>{courtName}</Text>}
+                    </View>
+                    <View style={{ alignItems: "flex-end", gap: 5 }}>
+                      {!!urgencyText && (
+                        <View style={[s.urgencyBadge, { backgroundColor: urgencyColor + "18", borderColor: urgencyColor + "40" }]}>
+                          <Text style={[s.urgencyText, { color: urgencyColor }]}>{urgencyText}</Text>
+                        </View>
+                      )}
+                      <View style={[s.statusBadge, { backgroundColor: statusColor.bg }]}>
+                        <Text style={[s.statusText, { color: statusColor.text }]}>{itemStatus}</Text>
+                      </View>
+                      {hasDetail && <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color={Colors.mutedDim} />}
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.clientName}>{name}</Text>
-                    {!!courtName && <Text style={s.courtName}>{courtName}</Text>}
+
+                  <View style={s.typesRow}>
+                    <View style={[s.typeChipDisplay, { backgroundColor: typeColor.bg }]}>
+                      <Text style={[s.typeChipDisplayText, { color: typeColor.text }]}>{eventType}</Text>
+                    </View>
                   </View>
-                  <View style={{ alignItems: "flex-end", gap: 5 }}>
-                    {!!urgencyText && (
-                      <View style={[s.urgencyBadge, { backgroundColor: urgencyColor + "18", borderColor: urgencyColor + "40" }]}>
-                        <Text style={[s.urgencyText, { color: urgencyColor }]}>{urgencyText}</Text>
+
+                  <View style={s.metaRow}>
+                    {!!timeStr && <View style={s.metaItem}><Ionicons name="time-outline" size={12} color={Colors.mutedDim} /><Text style={s.metaText}>{fmtTime(timeStr)}</Text></View>}
+                    {!!county && <View style={s.metaItem}><Ionicons name="location-outline" size={12} color={Colors.mutedDim} /><Text style={s.metaText}>{county}</Text></View>}
+                    {!!caseNum && <View style={s.metaItem}><Ionicons name="document-outline" size={12} color={Colors.mutedDim} /><Text style={s.metaText}>#{caseNum}</Text></View>}
+                  </View>
+                </TouchableOpacity>
+
+                {/* Expanded detail */}
+                {isExpanded && hasDetail && (
+                  <View style={s.expandedSection}>
+                    {!!judge && (
+                      <View style={s.expandedRow}>
+                        <Ionicons name="person-outline" size={13} color={Colors.mutedDim} />
+                        <Text style={s.expandedLabel}>Judge:</Text>
+                        <Text style={s.expandedValue}>{judge}</Text>
                       </View>
                     )}
-                    <View style={[s.statusBadge, { backgroundColor: statusColor.bg }]}>
-                      <Text style={[s.statusText, { color: statusColor.text }]}>{itemStatus}</Text>
-                    </View>
+                    {!!address && (
+                      <View style={s.expandedRow}>
+                        <Ionicons name="map-outline" size={13} color={Colors.mutedDim} />
+                        <Text style={s.expandedLabel}>Address:</Text>
+                        <Text style={s.expandedValue}>{address}</Text>
+                      </View>
+                    )}
+                    {!!notes && (
+                      <View style={s.expandedRow}>
+                        <Ionicons name="document-text-outline" size={13} color={Colors.mutedDim} />
+                        <Text style={s.expandedLabel}>Notes:</Text>
+                        <Text style={s.expandedValue}>{notes}</Text>
+                      </View>
+                    )}
+                    {charges.length > 0 && (
+                      <View style={s.expandedRow}>
+                        <Ionicons name="alert-circle-outline" size={13} color={Colors.mutedDim} />
+                        <Text style={s.expandedLabel}>Charges:</Text>
+                        <Text style={s.expandedValue}>{charges.map((c: any) => c.description ?? c.name ?? String(c)).join(", ")}</Text>
+                      </View>
+                    )}
                   </View>
-                </View>
+                )}
 
-                <View style={s.typesRow}>
-                  <View style={[s.typeChipDisplay, { backgroundColor: typeColor.bg }]}>
-                    <Text style={[s.typeChipDisplayText, { color: typeColor.text }]}>{eventType}</Text>
-                  </View>
-                </View>
-
-                <View style={s.metaRow}>
-                  {!!timeStr && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="time-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{fmtTime(timeStr)}</Text>
-                    </View>
-                  )}
-                  {!!county && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="location-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{county}</Text>
-                    </View>
-                  )}
-                  {!!caseNum && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="document-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>#{caseNum}</Text>
-                    </View>
-                  )}
-                  {!!judge && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="person-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>Judge {judge}</Text>
-                    </View>
-                  )}
-                  {!!address && (
-                    <View style={s.metaItem}>
-                      <Ionicons name="map-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{address}</Text>
-                    </View>
-                  )}
-                </View>
-
+                {/* Action row */}
                 <View style={s.cardFooter}>
-                  <TouchableOpacity style={s.footerAction} onPress={() => Alert.alert("Reminder Set", "You'll be notified before this court date.")}>
-                    <Ionicons name="notifications-outline" size={14} color={Colors.blueBright} />
+                  <TouchableOpacity style={s.footerAction} onPress={() => handleSendReminder(item)}>
+                    <Ionicons name="phone-portrait-outline" size={14} color={Colors.blueBright} />
                     <Text style={s.footerActionText}>Remind</Text>
                   </TouchableOpacity>
+
+                  {!isCompleted && (
+                    <TouchableOpacity
+                      style={[s.footerAction, { backgroundColor: Colors.green + "18", borderRadius: Radius.sm }]}
+                      onPress={() => handleMarkCompleted(item)}
+                      disabled={completingId === item.id}
+                    >
+                      {completingId === item.id
+                        ? <ActivityIndicator size="small" color={Colors.green} />
+                        : <><Ionicons name="checkmark-circle-outline" size={14} color={Colors.green} /><Text style={[s.footerActionText, { color: Colors.green }]}>Complete</Text></>
+                      }
+                    </TouchableOpacity>
+                  )}
+
+                  <TouchableOpacity style={s.footerAction} onPress={() => openReschedule(item)}>
+                    <Ionicons name="refresh-outline" size={14} color={Colors.gold} />
+                    <Text style={[s.footerActionText, { color: Colors.gold }]}>Reschedule</Text>
+                  </TouchableOpacity>
+
                   <View style={{ flex: 1 }} />
+
                   <TouchableOpacity style={s.footerAction} onPress={() => handleDelete(item)} disabled={deletingId === item.id}>
                     {deletingId === item.id
                       ? <ActivityIndicator size="small" color={Colors.red} />
@@ -347,6 +427,7 @@ export function CalendarScreen() {
         />
       )}
 
+      {/* Add Court Date Modal */}
       <Modal visible={showAdd} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
@@ -354,12 +435,9 @@ export function CalendarScreen() {
               <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
               <View style={s.modalHeader}>
                 <Text style={s.modalTitle}>Add Court Date</Text>
-                <TouchableOpacity onPress={() => setShowAdd(false)}>
-                  <Ionicons name="close" size={22} color={Colors.muted} />
-                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowAdd(false)}><Ionicons name="close" size={22} color={Colors.muted} /></TouchableOpacity>
               </View>
-
-              {[
+              {([
                 { key: "client_name", label: "Client Name *", placeholder: "Full name" },
                 { key: "court_date", label: "Court Date * (YYYY-MM-DD)", placeholder: "2026-07-15" },
                 { key: "court_time", label: "Time (HH:MM)", placeholder: "09:00" },
@@ -367,13 +445,12 @@ export function CalendarScreen() {
                 { key: "county", label: "County", placeholder: "Los Angeles" },
                 { key: "judge", label: "Judge", placeholder: "Hon. John Smith" },
                 { key: "address", label: "Address", placeholder: "123 Main St, City, CA" },
-              ].map((f) => (
+              ] as const).map((f) => (
                 <View key={f.key} style={s.field}>
                   <Text style={s.fieldLabel}>{f.label}</Text>
                   <TextInput style={s.fieldInput} value={(addForm as any)[f.key]} onChangeText={(v) => setAddForm((prev) => ({ ...prev, [f.key]: v }))} placeholder={f.placeholder} placeholderTextColor={Colors.mutedDim} />
                 </View>
               ))}
-
               <View style={s.field}>
                 <Text style={s.fieldLabel}>Event Type</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
@@ -384,17 +461,44 @@ export function CalendarScreen() {
                   ))}
                 </ScrollView>
               </View>
-
               <View style={s.field}>
                 <Text style={s.fieldLabel}>Notes</Text>
                 <TextInput style={[s.fieldInput, { height: 70, textAlignVertical: "top" }]} value={addForm.notes} onChangeText={(v) => setAddForm((f) => ({ ...f, notes: v }))} placeholder="Additional notes..." placeholderTextColor={Colors.mutedDim} multiline />
               </View>
-
               <TouchableOpacity style={[s.submitBtn, adding && { opacity: 0.6 }]} onPress={handleAddDate} disabled={adding}>
                 {adding ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Add Court Date</Text>}
               </TouchableOpacity>
               <View style={{ height: 20 }} />
             </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Reschedule Modal */}
+      <Modal visible={showReschedule} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
+            <View style={s.modalCardSmall}>
+              <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>Reschedule</Text>
+                <TouchableOpacity onPress={() => { setShowReschedule(false); setRescheduleItem(null) }}><Ionicons name="close" size={22} color={Colors.muted} /></TouchableOpacity>
+              </View>
+              {!!rescheduleItem && (
+                <Text style={s.rescheduleSubtitle}>{rescheduleItem.defendant_name ?? rescheduleItem.client_name ?? rescheduleItem.name ?? "Court Date"}</Text>
+              )}
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>New Date * (YYYY-MM-DD)</Text>
+                <TextInput style={s.fieldInput} value={rescheduleDate} onChangeText={setRescheduleDate} placeholder="2026-08-01" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>New Time (HH:MM)</Text>
+                <TextInput style={s.fieldInput} value={rescheduleTime} onChangeText={setRescheduleTime} placeholder="09:00" placeholderTextColor={Colors.mutedDim} />
+              </View>
+              <TouchableOpacity style={[s.submitBtn, { backgroundColor: Colors.gold }, rescheduling && { opacity: 0.6 }]} onPress={handleReschedule} disabled={rescheduling}>
+                {rescheduling ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Confirm Reschedule</Text>}
+              </TouchableOpacity>
+            </View>
           </KeyboardAvoidingView>
         </View>
       </Modal>
@@ -443,13 +547,19 @@ const s = StyleSheet.create({
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
-  cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4 },
+  expandedSection: { borderTopWidth: 1, borderTopColor: Colors.borderFaint, paddingTop: Spacing.sm, marginBottom: Spacing.sm, gap: 6 },
+  expandedRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  expandedLabel: { fontSize: FontSize.xs, color: Colors.mutedDim, fontFamily: Font.semibold, minWidth: 60 },
+  expandedValue: { fontSize: FontSize.xs, color: Colors.text, flex: 1 },
+  cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4, flexWrap: "wrap" },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
   modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40, maxHeight: "92%" },
+  modalCardSmall: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
   modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  rescheduleSubtitle: { fontSize: FontSize.sm, color: Colors.muted, marginBottom: Spacing.lg, marginTop: -Spacing.sm },
   field: { marginBottom: Spacing.md },
   fieldLabel: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold, marginBottom: 6 },
   fieldInput: { backgroundColor: Colors.bgInput, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 13, color: Colors.text, fontSize: FontSize.sm },
