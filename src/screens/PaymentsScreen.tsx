@@ -1,171 +1,276 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
-import { Colors, FontSize, Radius, Spacing } from "../constants/theme"
+import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import { useAuth } from "../context/AuthContext"
+import { api } from "../lib/api"
+import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
-const METRICS = [
-  { label: "Total Revenue", value: "$94,200", delta: "↑ 8.4%", color: Colors.green },
-  { label: "Collected", value: "$81,800", delta: "87%", color: Colors.blueBright },
-  { label: "Balance Due", value: "$12,400", delta: "13%", color: Colors.gold },
-  { label: "Overdue", value: "$3,200", delta: "3 clients", color: Colors.red },
-]
+function fmtMoney(v: any): string {
+  const n = parseFloat(String(v ?? "0").replace(/[$,]/g, ""))
+  if (!n && n !== 0) return "—"
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 
-const TABS = ["All", "Plans", "Today", "Overdue", "Paid"]
+function fmtDate(d: string): string {
+  if (!d) return "—"
+  try { return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) }
+  catch { return d }
+}
 
-const PAYMENTS = [
-  { id: "1", name: "Marcus Thompson", case: "BWP-001", bond: "$15,000", paid: 10000, remaining: 5000, nextDue: "Jun 24", status: "On Track", daysOverdue: null },
-  { id: "2", name: "James Rivera", case: "BWP-002", bond: "$25,000", paid: 10000, remaining: 15000, nextDue: "Jun 20", status: "Overdue", daysOverdue: 2 },
-  { id: "3", name: "Sara Mitchell", case: "BWP-003", bond: "$10,000", paid: 10000, remaining: 0, nextDue: null, status: "Paid in Full", daysOverdue: null },
-  { id: "4", name: "David Kim", case: "BWP-004", bond: "$8,500", paid: 4250, remaining: 4250, nextDue: "Jul 1", status: "On Track", daysOverdue: null },
-  { id: "5", name: "Angela Foster", case: "BWP-005", bond: "$12,000", paid: 6000, remaining: 6000, nextDue: "Jun 18", status: "Overdue", daysOverdue: 4 },
-]
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  paid: { bg: Colors.green + "18", text: Colors.green },
+  Paid: { bg: Colors.green + "18", text: Colors.green },
+  completed: { bg: Colors.green + "18", text: Colors.green },
+  pending: { bg: Colors.gold + "18", text: Colors.gold },
+  Pending: { bg: Colors.gold + "18", text: Colors.gold },
+  due: { bg: Colors.gold + "18", text: Colors.gold },
+  Due: { bg: Colors.gold + "18", text: Colors.gold },
+  overdue: { bg: Colors.red + "18", text: Colors.red },
+  Overdue: { bg: Colors.red + "18", text: Colors.red },
+  failed: { bg: Colors.red + "18", text: Colors.red },
+  partial: { bg: Colors.orange + "18", text: Colors.orange },
+}
 
-const STATUS_COLORS: Record<string, string> = {
-  "On Track": Colors.green,
-  "Overdue": Colors.red,
-  "Paid in Full": Colors.blueBright,
+const PAYMENT_TYPE_ICONS: Record<string, string> = {
+  premium: "shield-checkmark-outline",
+  Premium: "shield-checkmark-outline",
+  fee: "receipt-outline",
+  Fee: "receipt-outline",
+  collateral: "lock-closed-outline",
+  Collateral: "lock-closed-outline",
+  refund: "return-up-back-outline",
+  Refund: "return-up-back-outline",
 }
 
 export function PaymentsScreen() {
+  const navigation = useNavigation()
+  const { identity } = useAuth()
+  const [payments, setPayments] = useState<any[]>([])
+  const [filtered, setFiltered] = useState<any[]>([])
+  const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!identity) return
+    api.payments(identity).then((res: any) => {
+      const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
+      setPayments(Array.isArray(raw) ? raw : [])
+      setFiltered(Array.isArray(raw) ? raw : [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [identity])
+
+  const applyFilters = (q: string, status: string, source = payments) => {
+    let out = source
+    if (status !== "all") {
+      out = out.filter((p) => (p.status ?? "").toLowerCase() === status.toLowerCase())
+    }
+    if (q.trim()) {
+      const lq = q.toLowerCase()
+      out = out.filter((p) =>
+        (p.client_name ?? p.client ?? "").toLowerCase().includes(lq) ||
+        (p.payment_type ?? p.type ?? "").toLowerCase().includes(lq)
+      )
+    }
+    setFiltered(out)
+  }
+
+  const totalCollected = payments.filter((p) => ["paid", "completed", "Paid"].includes(p.status ?? "")).reduce((sum, p) => sum + (parseFloat(String(p.amount ?? "0").replace(/[$,]/g, "")) || 0), 0)
+  const totalOutstanding = payments.filter((p) => ["pending", "due", "Pending", "Due"].includes(p.status ?? "")).reduce((sum, p) => sum + (parseFloat(String(p.amount ?? "0").replace(/[$,]/g, "")) || 0), 0)
+  const totalOverdue = payments.filter((p) => ["overdue", "Overdue"].includes(p.status ?? "")).reduce((sum, p) => sum + (parseFloat(String(p.amount ?? "0").replace(/[$,]/g, "")) || 0), 0)
+
+  const kpis = [
+    { label: "Collected", value: fmtMoney(totalCollected), color: Colors.green },
+    { label: "Outstanding", value: fmtMoney(totalOutstanding), color: Colors.gold },
+    { label: "Overdue", value: fmtMoney(totalOverdue), color: Colors.red },
+    { label: "Total", value: String(payments.length), color: Colors.text },
+  ]
+
+  const statusTabs = ["all", "paid", "pending", "overdue"]
+
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
+      {/* Header */}
       <View style={s.header}>
-        <Text style={s.title}>Payments</Text>
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.text} />
+        </TouchableOpacity>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.green + "18", alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="card-outline" size={17} color={Colors.green} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={s.title}>Payments</Text>
+          <Text style={s.subtitle}>Integrated payment tracking</Text>
+        </View>
         <TouchableOpacity style={s.addBtn}>
-          <Ionicons name="add" size={22} color="#fff" />
+          <Ionicons name="add" size={18} color="#fff" />
+          <Text style={s.addBtnText}>Record</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Metrics */}
-      <View style={s.metricsRow}>
-        {METRICS.map((m) => (
-          <View key={m.label} style={s.metricCard}>
-            <Text style={[s.metricValue, { color: m.color }]}>{m.value}</Text>
-            <Text style={s.metricLabel}>{m.label}</Text>
-            <Text style={[s.metricDelta, { color: m.color }]}>{m.delta}</Text>
+      {/* KPI Row */}
+      <View style={s.kpiRow}>
+        {kpis.map((k) => (
+          <View key={k.label} style={s.kpiCard}>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
-        ))}
-      </View>
-
-      {/* Tabs */}
-      <View style={s.tabRow}>
-        {TABS.map((t, i) => (
-          <TouchableOpacity key={t} style={[s.tab, i === 0 && s.tabActive]}>
-            <Text style={[s.tabText, i === 0 && s.tabTextActive]}>{t}</Text>
-          </TouchableOpacity>
         ))}
       </View>
 
       {/* Search */}
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
-        <TextInput style={s.searchInput} placeholder="Search payments..." placeholderTextColor={Colors.mutedDim} />
+        <TextInput
+          style={s.searchInput}
+          placeholder="Search client, type..."
+          placeholderTextColor={Colors.mutedDim}
+          value={query}
+          onChangeText={(t) => { setQuery(t); applyFilters(t, statusFilter) }}
+        />
       </View>
 
-      <FlatList
-        data={PAYMENTS}
-        keyExtractor={(i) => i.id}
-        contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}
-        showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        renderItem={({ item }) => {
-          const pct = Math.round((item.paid / (item.paid + item.remaining)) * 100)
-          const sc = STATUS_COLORS[item.status] ?? Colors.muted
-          return (
-            <View style={[s.card, item.status === "Overdue" && s.cardOverdue]}>
-              <View style={s.cardTop}>
-                <View style={s.avatar}>
-                  <Text style={s.avatarText}>{item.name[0]}</Text>
-                </View>
-                <View style={s.info}>
-                  <Text style={s.cname}>{item.name}</Text>
-                  <Text style={s.sub}>{item.case} · Bond: {item.bond}</Text>
-                </View>
-                <View style={[s.badge, { backgroundColor: sc + "22" }]}>
-                  <Text style={[s.badgeText, { color: sc }]}>{item.status}</Text>
-                </View>
-              </View>
+      {/* Status tabs */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
+        {statusTabs.map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[s.tab, statusFilter === t && s.tabActive]}
+            onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
+          >
+            <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>
+              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
-              {/* Progress bar */}
-              <View style={s.progressWrap}>
-                <View style={s.progressBar}>
-                  <View style={[s.progressFill, { width: `${pct}%` as any, backgroundColor: sc }]} />
-                </View>
-                <Text style={s.progressPct}>{pct}% paid</Text>
-              </View>
-
-              <View style={s.amountRow}>
-                <View style={s.amountBlock}>
-                  <Text style={s.amountLabel}>Paid</Text>
-                  <Text style={[s.amountValue, { color: Colors.green }]}>${item.paid.toLocaleString()}</Text>
-                </View>
-                <View style={s.amountBlock}>
-                  <Text style={s.amountLabel}>Remaining</Text>
-                  <Text style={[s.amountValue, { color: item.remaining > 0 ? Colors.gold : Colors.mutedDim }]}>${item.remaining.toLocaleString()}</Text>
-                </View>
-                <View style={s.amountBlock}>
-                  <Text style={s.amountLabel}>{item.daysOverdue ? "Overdue" : "Next Due"}</Text>
-                  <Text style={[s.amountValue, { color: item.daysOverdue ? Colors.red : Colors.text }]}>
-                    {item.daysOverdue ? `${item.daysOverdue}d overdue` : item.nextDue ?? "—"}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={s.actionRow}>
-                <TouchableOpacity style={s.actionBtn}>
-                  <Ionicons name="card-outline" size={14} color={Colors.green} />
-                  <Text style={[s.actionText, { color: Colors.green }]}>Receive Payment</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.actionBtnGhost}>
-                  <Text style={s.actionTextGhost}>Send Reminder</Text>
-                </TouchableOpacity>
-              </View>
+      {loading ? (
+        <View style={s.center}>
+          <ActivityIndicator size="large" color={Colors.blue} />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => String(item.id ?? Math.random())}
+          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={s.center}>
+              <Ionicons name="card-outline" size={48} color={Colors.mutedDim} />
+              <Text style={s.emptyTitle}>No payments found</Text>
             </View>
-          )
-        }}
-      />
+          }
+          renderItem={({ item }) => {
+            const status = item.status ?? "pending"
+            const sc = STATUS_COLORS[status] ?? STATUS_COLORS.pending
+            const type = item.payment_type ?? item.type ?? "Payment"
+            const typeIcon = PAYMENT_TYPE_ICONS[type] ?? "card-outline"
+            const clientName = item.client_name ?? item.client ?? "Unknown Client"
+            const date = item.payment_date ?? item.date ?? item.created_at ?? ""
+            const method = item.payment_method ?? item.method ?? ""
+
+            return (
+              <View style={s.card}>
+                <View style={s.cardTop}>
+                  <View style={[s.typeIcon, { backgroundColor: Colors.blue + "18" }]}>
+                    <Ionicons name={typeIcon as any} size={20} color={Colors.blueBright} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.clientName}>{clientName}</Text>
+                    <Text style={s.paymentType}>{type}</Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end", gap: 6 }}>
+                    <Text style={s.amount}>{fmtMoney(item.amount)}</Text>
+                    <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                      <Text style={[s.statusText, { color: sc.text }]}>{status}</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={s.metaRow}>
+                  {!!date && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="calendar-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{fmtDate(date)}</Text>
+                    </View>
+                  )}
+                  {!!method && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="card-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{method}</Text>
+                    </View>
+                  )}
+                  {item.bond_id != null && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="shield-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>Bond #{item.bond_id}</Text>
+                    </View>
+                  )}
+                </View>
+
+                {!!item.notes && (
+                  <Text style={s.notes} numberOfLines={2}>{item.notes}</Text>
+                )}
+
+                <View style={s.cardFooter}>
+                  <TouchableOpacity style={s.footerAction}>
+                    <Ionicons name="receipt-outline" size={14} color={Colors.blueBright} />
+                    <Text style={s.footerActionText}>Receipt</Text>
+                  </TouchableOpacity>
+                  {["pending", "due", "Pending", "Due"].includes(status) && (
+                    <TouchableOpacity style={[s.footerAction, { backgroundColor: Colors.green + "18", borderRadius: Radius.sm }]}>
+                      <Ionicons name="checkmark-outline" size={14} color={Colors.green} />
+                      <Text style={[s.footerActionText, { color: Colors.green }]}>Mark Paid</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            )
+          }}
+        />
+      )}
     </SafeAreaView>
   )
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg },
-  title: { fontSize: FontSize.xl, color: Colors.text, fontWeight: "800" },
-  addBtn: { width: 38, height: 38, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center" },
-  metricsRow: { flexDirection: "row", gap: 8, paddingHorizontal: Spacing.xl, marginBottom: Spacing.lg },
-  metricCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: 10, alignItems: "center" },
-  metricValue: { fontSize: FontSize.sm, fontWeight: "800" },
-  metricLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 1, textAlign: "center" },
-  metricDelta: { fontSize: 9, fontWeight: "600", marginTop: 1 },
-  tabRow: { flexDirection: "row", paddingHorizontal: Spacing.xl, marginBottom: Spacing.md, gap: 6 },
-  tab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)" },
-  tabActive: { backgroundColor: Colors.blue + "22", borderColor: Colors.blue + "66" },
-  tabText: { fontSize: FontSize.xs, color: Colors.mutedDim, fontWeight: "600" },
-  tabTextActive: { color: Colors.blueBright },
-  searchWrap: { flexDirection: "row", alignItems: "center", marginHorizontal: Spacing.xl, marginBottom: Spacing.lg, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)", paddingHorizontal: Spacing.md, height: 42, gap: Spacing.sm },
-  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.md },
-  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg },
-  cardOverdue: { borderColor: Colors.red + "44", borderLeftWidth: 3, borderLeftColor: Colors.red },
-  cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(47,147,255,0.15)", alignItems: "center", justifyContent: "center" },
-  avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontWeight: "700" },
-  info: { flex: 1 },
-  cname: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  sub: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
-  badgeText: { fontSize: 10, fontWeight: "700" },
-  progressWrap: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
-  progressBar: { flex: 1, height: 5, borderRadius: 3, backgroundColor: "rgba(70,120,190,0.15)", overflow: "hidden" },
-  progressFill: { height: "100%", borderRadius: 3 },
-  progressPct: { fontSize: FontSize.xs, color: Colors.muted, width: 56 },
-  amountRow: { flexDirection: "row", marginBottom: Spacing.md },
-  amountBlock: { flex: 1 },
-  amountLabel: { fontSize: 10, color: Colors.mutedDim, marginBottom: 2 },
-  amountValue: { fontSize: FontSize.sm, fontWeight: "600" },
-  actionRow: { flexDirection: "row", gap: 10, borderTopWidth: 1, borderTopColor: "rgba(70,120,190,0.1)", paddingTop: Spacing.md },
-  actionBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, backgroundColor: Colors.green + "18", borderRadius: Radius.sm, paddingVertical: 8, borderWidth: 1, borderColor: Colors.green + "33" },
-  actionText: { fontSize: FontSize.xs, fontWeight: "700" },
-  actionBtnGhost: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(70,120,190,0.1)", borderRadius: Radius.sm, paddingVertical: 8, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)" },
-  actionTextGhost: { fontSize: FontSize.xs, color: Colors.muted, fontWeight: "600" },
+  header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
+  subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
+  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
+  kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
+  kpiValue: { fontSize: FontSize.lg, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
+  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
+  tabsScroll: { marginBottom: Spacing.md, height: 38 },
+  tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
+  tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  tabActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
+  tabTextActive: { color: "#fff" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
+  emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
+  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
+  cardTop: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.md, marginBottom: Spacing.md },
+  typeIcon: { width: 44, height: 44, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
+  clientName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  paymentType: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 2 },
+  amount: { fontSize: FontSize.xl, color: Colors.text, fontFamily: Font.extrabold },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
+  statusText: { fontSize: 10, fontFamily: Font.bold },
+  metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: Spacing.sm },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  metaText: { fontSize: FontSize.xs, color: Colors.muted },
+  notes: { fontSize: FontSize.xs, color: Colors.mutedDim, marginBottom: Spacing.sm, fontStyle: "italic" },
+  cardFooter: { flexDirection: "row", alignItems: "center", gap: 8, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
+  footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
+  footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
 })

@@ -1,158 +1,274 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
-import { Colors, FontSize, Radius, Spacing } from "../constants/theme"
+import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import { useAuth } from "../context/AuthContext"
+import { api } from "../lib/api"
+import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
-const TABS = ["Available", "Used", "Expiring", "Expired", "Voided"]
+function fmtDate(d: string): string {
+  if (!d) return "—"
+  try { return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) }
+  catch { return d }
+}
 
-const POWERS = [
-  { id: "1", power: "ACE-100142", surety: "Accredited Surety", amount: "$25,000", prefix: "ACE", expiry: "Dec 31, 2026", status: "Available", daysLeft: null },
-  { id: "2", power: "ACE-100143", surety: "Accredited Surety", amount: "$25,000", prefix: "ACE", expiry: "Dec 31, 2026", status: "Available", daysLeft: null },
-  { id: "3", power: "BIG-200201", surety: "BigCo Surety", amount: "$10,000", prefix: "BIG", expiry: "Jul 15, 2026", status: "Expiring", daysLeft: 23 },
-  { id: "4", power: "BIG-200202", surety: "BigCo Surety", amount: "$10,000", prefix: "BIG", expiry: "Jul 15, 2026", status: "Expiring", daysLeft: 23 },
-  { id: "5", power: "ACE-100099", surety: "Accredited Surety", amount: "$50,000", prefix: "ACE", expiry: "Jun 1, 2026", status: "Expired", daysLeft: null },
-  { id: "6", power: "ACE-100100", surety: "Accredited Surety", amount: "$15,000", prefix: "ACE", expiry: "May 20, 2026", status: "Used", daysLeft: null },
-]
+function fmtMoney(v: any): string {
+  const n = parseFloat(String(v ?? "0").replace(/[$,]/g, ""))
+  if (!n) return "—"
+  if (n >= 1000000) return `$${(n / 1000000).toFixed(2)}M`
+  if (n >= 1000) return `$${(n / 1000).toFixed(0)}k`
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 0 })}`
+}
 
-const INVENTORY = [
-  { surety: "Accredited Surety", amounts: [{ val: "$25,000", count: 8 }, { val: "$10,000", count: 4 }, { val: "$5,000", count: 12 }] },
-  { surety: "BigCo Surety", amounts: [{ val: "$10,000", count: 2 }, { val: "$5,000", count: 6 }] },
-]
+function daysUntilExpiry(d: string): number {
+  if (!d) return Infinity
+  try {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const exp = new Date(d); exp.setHours(0, 0, 0, 0)
+    return Math.ceil((exp.getTime() - today.getTime()) / 86400000)
+  } catch { return Infinity }
+}
 
-const STATUS_COLORS: Record<string, string> = {
-  Available: Colors.green,
-  Used: Colors.blueBright,
-  Expiring: Colors.gold,
-  Expired: Colors.red,
-  Voided: Colors.mutedDim,
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  active: { bg: Colors.green + "18", text: Colors.green },
+  Active: { bg: Colors.green + "18", text: Colors.green },
+  used: { bg: Colors.blue + "18", text: Colors.blueBright },
+  Used: { bg: Colors.blue + "18", text: Colors.blueBright },
+  expired: { bg: Colors.red + "18", text: Colors.red },
+  Expired: { bg: Colors.red + "18", text: Colors.red },
+  voided: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+  Voided: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+  available: { bg: Colors.green + "18", text: Colors.green },
+  Available: { bg: Colors.green + "18", text: Colors.green },
 }
 
 export function PowersScreen() {
+  const navigation = useNavigation()
+  const { identity } = useAuth()
+  const [powers, setPowers] = useState<any[]>([])
+  const [filtered, setFiltered] = useState<any[]>([])
+  const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!identity) return
+    api.powers(identity).then((res: any) => {
+      const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
+      setPowers(Array.isArray(raw) ? raw : [])
+      setFiltered(Array.isArray(raw) ? raw : [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [identity])
+
+  const applyFilters = (q: string, status: string, source = powers) => {
+    let out = source
+    if (status !== "all") out = out.filter((p) => (p.status ?? "").toLowerCase() === status.toLowerCase())
+    if (q.trim()) {
+      const lq = q.toLowerCase()
+      out = out.filter((p) =>
+        (p.power_number ?? p.power_id ?? "").toString().toLowerCase().includes(lq) ||
+        (p.defendant_name ?? p.defendant ?? "").toLowerCase().includes(lq) ||
+        (p.surety ?? p.surety_company ?? "").toLowerCase().includes(lq)
+      )
+    }
+    setFiltered(out)
+  }
+
+  const totalValue = powers.reduce((sum, p) => sum + (parseFloat(String(p.amount ?? p.bond_amount ?? "0").replace(/[$,]/g, "")) || 0), 0)
+  const active = powers.filter((p) => ["active", "available"].includes((p.status ?? "").toLowerCase())).length
+  const expiringSoon = powers.filter((p) => {
+    const days = daysUntilExpiry(p.expiry_date ?? p.expires_at ?? "")
+    return days >= 0 && days <= 30
+  }).length
+
+  const kpis = [
+    { label: "Total", value: String(powers.length), color: Colors.text },
+    { label: "Active", value: String(active), color: Colors.green },
+    { label: "Expiring (30d)", value: String(expiringSoon), color: Colors.gold },
+    { label: "Total Value", value: fmtMoney(totalValue), color: Colors.blueBright },
+  ]
+
+  const statusTabs = ["all", "active", "available", "used", "expired", "voided"]
+
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <View>
-          <Text style={s.title}>Powers</Text>
-          <Text style={s.subtitle}>Surety Bond Powers</Text>
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.text} />
+        </TouchableOpacity>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueBright + "18", alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="briefcase-outline" size={17} color={Colors.blueBright} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={s.title}>Powers of Attorney</Text>
+          <Text style={s.subtitle}>Surety bond powers</Text>
         </View>
         <TouchableOpacity style={s.addBtn}>
-          <Ionicons name="add" size={22} color="#fff" />
+          <Ionicons name="add" size={18} color="#fff" />
         </TouchableOpacity>
       </View>
 
-      {/* Inventory Summary */}
-      <View style={s.inventoryWrap}>
-        <Text style={s.inventoryTitle}>Inventory Summary</Text>
-        {INVENTORY.map((inv) => (
-          <View key={inv.surety} style={s.invRow}>
-            <Text style={s.invSurety}>{inv.surety}</Text>
-            <View style={s.invAmounts}>
-              {inv.amounts.map((a) => (
-                <View key={a.val} style={s.invChip}>
-                  <Text style={s.invVal}>{a.val}</Text>
-                  <View style={s.invCount}><Text style={s.invCountText}>{a.count}</Text></View>
-                </View>
-              ))}
-            </View>
+      <View style={s.kpiRow}>
+        {kpis.map((k) => (
+          <View key={k.label} style={s.kpiCard}>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Tabs */}
-      <View style={s.tabRow}>
-        {TABS.map((t, i) => (
-          <TouchableOpacity key={t} style={[s.tab, i === 0 && s.tabActive]}>
-            <Text style={[s.tabText, i === 0 && s.tabTextActive]}>{t}</Text>
-          </TouchableOpacity>
-        ))}
+      <View style={s.searchWrap}>
+        <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
+        <TextInput
+          style={s.searchInput}
+          placeholder="Search power #, defendant..."
+          placeholderTextColor={Colors.mutedDim}
+          value={query}
+          onChangeText={(t) => { setQuery(t); applyFilters(t, statusFilter) }}
+        />
       </View>
 
-      <FlatList
-        data={POWERS}
-        keyExtractor={(i) => i.id}
-        contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}
-        showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-        renderItem={({ item }) => {
-          const sc = STATUS_COLORS[item.status] ?? Colors.muted
-          return (
-            <View style={s.card}>
-              <View style={s.cardTop}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.powerNum}>{item.power}</Text>
-                  <Text style={s.surety}>{item.surety}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
+        {statusTabs.map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[s.tab, statusFilter === t && s.tabActive]}
+            onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
+          >
+            <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>
+              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {loading ? (
+        <View style={s.center}><ActivityIndicator size="large" color={Colors.blue} /></View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => String(item.id ?? Math.random())}
+          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={s.center}>
+              <Ionicons name="briefcase-outline" size={48} color={Colors.mutedDim} />
+              <Text style={s.emptyTitle}>No powers found</Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const powerNum = item.power_number ?? item.power_id ?? item.id ?? "—"
+            const defendant = item.defendant_name ?? item.defendant ?? ""
+            const surety = item.surety ?? item.surety_company ?? ""
+            const status = item.status ?? "active"
+            const sc = STATUS_COLORS[status] ?? STATUS_COLORS.active
+            const amount = item.amount ?? item.bond_amount ?? null
+            const issueDate = item.issue_date ?? item.issued_at ?? item.created_at ?? ""
+            const expiryDate = item.expiry_date ?? item.expires_at ?? ""
+            const days = daysUntilExpiry(expiryDate)
+            const isExpiringSoon = days >= 0 && days <= 30
+
+            return (
+              <View style={[s.card, isExpiringSoon && s.cardWarning]}>
+                <View style={s.cardTop}>
+                  <View style={s.powerIcon}>
+                    <Ionicons name="briefcase-outline" size={20} color={Colors.blue} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.powerNum}>POA #{powerNum}</Text>
+                    {!!defendant && <Text style={s.defendant}>{defendant}</Text>}
+                  </View>
+                  <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                    <Text style={[s.statusText, { color: sc.text }]}>{status}</Text>
+                  </View>
                 </View>
-                <View style={[s.badge, { backgroundColor: sc + "22" }]}>
-                  <Text style={[s.badgeText, { color: sc }]}>{item.status}</Text>
-                </View>
-              </View>
-              <View style={s.meta}>
-                <View style={s.metaItem}>
-                  <Text style={s.metaLabel}>Face Amount</Text>
-                  <Text style={[s.metaVal, { color: Colors.blueBright }]}>{item.amount}</Text>
-                </View>
-                <View style={s.metaItem}>
-                  <Text style={s.metaLabel}>Prefix</Text>
-                  <Text style={s.metaVal}>{item.prefix}</Text>
-                </View>
-                <View style={s.metaItem}>
-                  <Text style={s.metaLabel}>Expiry</Text>
-                  <Text style={[s.metaVal, { color: item.status === "Expiring" ? Colors.gold : item.status === "Expired" ? Colors.red : Colors.text }]}>{item.expiry}</Text>
-                </View>
-                {item.daysLeft && (
-                  <View style={s.metaItem}>
-                    <Text style={s.metaLabel}>Days Left</Text>
-                    <Text style={[s.metaVal, { color: Colors.gold }]}>{item.daysLeft}d</Text>
+
+                {!!amount && (
+                  <View style={s.amountRow}>
+                    <Text style={s.amountLabel}>Bond Amount</Text>
+                    <Text style={s.amountValue}>{fmtMoney(amount)}</Text>
                   </View>
                 )}
-              </View>
-              {item.status === "Available" && (
-                <View style={s.voidRow}>
-                  <TouchableOpacity style={s.voidBtn}>
-                    <Ionicons name="close-circle-outline" size={14} color={Colors.red} />
-                    <Text style={s.voidText}>Void</Text>
+
+                <View style={s.metaRow}>
+                  {!!surety && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="business-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{surety}</Text>
+                    </View>
+                  )}
+                  {!!issueDate && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="calendar-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>Issued {fmtDate(issueDate)}</Text>
+                    </View>
+                  )}
+                  {!!expiryDate && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="time-outline" size={12} color={isExpiringSoon ? Colors.gold : Colors.mutedDim} />
+                      <Text style={[s.metaText, isExpiringSoon && { color: Colors.gold }]}>
+                        Expires {fmtDate(expiryDate)}{isExpiringSoon ? ` (${days}d)` : ""}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={s.cardFooter}>
+                  <TouchableOpacity style={s.footerAction}>
+                    <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
+                    <Text style={s.footerActionText}>View</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.footerAction}>
+                    <Ionicons name="download-outline" size={14} color={Colors.mutedDim} />
+                    <Text style={[s.footerActionText, { color: Colors.mutedDim }]}>Download</Text>
                   </TouchableOpacity>
                 </View>
-              )}
-            </View>
-          )
-        }}
-      />
+              </View>
+            )
+          }}
+        />
+      )}
     </SafeAreaView>
   )
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg },
-  title: { fontSize: FontSize.xl, color: Colors.text, fontWeight: "800" },
+  header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  addBtn: { width: 38, height: 38, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center" },
-  inventoryWrap: { marginHorizontal: Spacing.xl, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg, marginBottom: Spacing.lg },
-  inventoryTitle: { fontSize: FontSize.xs, color: Colors.mutedDim, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: Spacing.md },
-  invRow: { marginBottom: Spacing.sm },
-  invSurety: { fontSize: FontSize.xs, color: Colors.muted, fontWeight: "600", marginBottom: 6 },
-  invAmounts: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  invChip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(70,120,190,0.1)", borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 4 },
-  invVal: { fontSize: FontSize.xs, color: Colors.text, fontWeight: "600" },
-  invCount: { backgroundColor: Colors.green + "22", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
-  invCountText: { fontSize: 10, color: Colors.green, fontWeight: "700" },
-  tabRow: { flexDirection: "row", paddingHorizontal: Spacing.xl, marginBottom: Spacing.md, gap: 6 },
-  tab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)" },
-  tabActive: { backgroundColor: Colors.blue + "22", borderColor: Colors.blue + "66" },
-  tabText: { fontSize: FontSize.xs, color: Colors.mutedDim, fontWeight: "600" },
-  tabTextActive: { color: Colors.blueBright },
-  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg },
-  cardTop: { flexDirection: "row", alignItems: "flex-start", marginBottom: Spacing.md },
-  powerNum: { fontSize: FontSize.md, color: Colors.blueBright, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  surety: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
-  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
-  badgeText: { fontSize: 10, fontWeight: "700" },
-  meta: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.md },
-  metaItem: { minWidth: 90 },
-  metaLabel: { fontSize: 9, color: Colors.mutedDim, fontWeight: "600", textTransform: "uppercase", marginBottom: 2 },
-  metaVal: { fontSize: FontSize.sm, color: Colors.text, fontWeight: "600" },
-  voidRow: { borderTopWidth: 1, borderTopColor: "rgba(70,120,190,0.1)", marginTop: Spacing.md, paddingTop: Spacing.md },
-  voidBtn: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start" },
-  voidText: { fontSize: FontSize.xs, color: Colors.red, fontWeight: "700" },
+  addBtn: { width: 36, height: 36, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center" },
+  kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
+  kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
+  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
+  tabsScroll: { marginBottom: Spacing.md, height: 38 },
+  tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
+  tab: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  tabActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
+  tabTextActive: { color: "#fff" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
+  emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
+  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
+  cardWarning: { borderColor: Colors.gold + "40" },
+  cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
+  powerIcon: { width: 44, height: 44, borderRadius: Radius.md, backgroundColor: Colors.blue + "14", alignItems: "center", justifyContent: "center" },
+  powerNum: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  defendant: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 2 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.sm },
+  statusText: { fontSize: 10, fontFamily: Font.bold, textTransform: "capitalize" },
+  amountRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.sm, paddingBottom: Spacing.sm, borderBottomWidth: 1, borderBottomColor: Colors.borderFaint },
+  amountLabel: { fontSize: FontSize.xs, color: Colors.mutedDim },
+  amountValue: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: Spacing.sm },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  metaText: { fontSize: FontSize.xs, color: Colors.muted },
+  cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint, gap: 4 },
+  footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
+  footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
 })

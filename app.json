@@ -1,17 +1,20 @@
 {
   "expo": {
-    "name": "bailwatchpro-v2-mobile",
-    "slug": "bailwatchpro-v2-mobile",
+    "name": "BailWatch Pro",
+    "slug": "bailwatch-pro-",
+    "owner": "hirelocal-usa",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hirelocalusa.bailwatchpro"
     },
     "android": {
+      "package": "com.hirelocalusa.bailwatchpro",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#04070d",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -23,6 +26,11 @@
     },
     "plugins": [
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "62ba6d34-4cc9-448e-8e9e-0c6f6375a818"
+      }
+    }
   }
 }

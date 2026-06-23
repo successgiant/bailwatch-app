@@ -1,163 +1,258 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, ScrollView } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
-import { Colors, FontSize, Radius, Spacing } from "../constants/theme"
+import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import { useAuth } from "../context/AuthContext"
+import { api } from "../lib/api"
+import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
-const TABS = ["All", "Sent", "Received", "Expired"]
+function fmtDate(d: string): string {
+  if (!d) return "—"
+  try { return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) }
+  catch { return d }
+}
 
-const APPS = [
-  { id: "1", name: "Robert Hayes", county: "Dallas County", status: "Received", sent: "Jun 20", signed: "Jun 21", bond: "$15,000" },
-  { id: "2", name: "Tasha Williams", county: "Harris County", status: "Sent", sent: "Jun 21", signed: null, bond: "$8,000" },
-  { id: "3", name: "Carlos Mendez", county: "Bexar County", status: "Received", sent: "Jun 19", signed: "Jun 20", bond: "$12,500" },
-  { id: "4", name: "Deon Jackson", county: "Tarrant County", status: "Expired", sent: "Jun 10", signed: null, bond: "$5,000" },
-  { id: "5", name: "Maria Torres", county: "Travis County", status: "Sent", sent: "Jun 22", signed: null, bond: "$20,000" },
-]
+function fmtMoney(v: any): string {
+  const n = parseFloat(String(v ?? "0").replace(/[$,]/g, ""))
+  if (!n) return "—"
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 0 })}`
+}
 
-const STATUS_COLORS: Record<string, string> = {
-  Sent: Colors.gold,
-  Received: Colors.green,
-  Expired: Colors.red,
-  Declined: Colors.red,
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  pending: { bg: Colors.gold + "18", text: Colors.gold },
+  Pending: { bg: Colors.gold + "18", text: Colors.gold },
+  approved: { bg: Colors.green + "18", text: Colors.green },
+  Approved: { bg: Colors.green + "18", text: Colors.green },
+  denied: { bg: Colors.red + "18", text: Colors.red },
+  Denied: { bg: Colors.red + "18", text: Colors.red },
+  draft: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+  Draft: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+  submitted: { bg: Colors.blue + "18", text: Colors.blueBright },
+  Submitted: { bg: Colors.blue + "18", text: Colors.blueBright },
+  in_review: { bg: Colors.purple + "18", text: Colors.purple },
+  "In Review": { bg: Colors.purple + "18", text: Colors.purple },
 }
 
 export function BondAppScreen() {
+  const navigation = useNavigation()
+  const { identity } = useAuth()
+  const [apps, setApps] = useState<any[]>([])
+  const [filtered, setFiltered] = useState<any[]>([])
+  const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!identity) return
+    api.bondapp(identity).then((res: any) => {
+      const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
+      setApps(Array.isArray(raw) ? raw : [])
+      setFiltered(Array.isArray(raw) ? raw : [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [identity])
+
+  const applyFilters = (q: string, status: string, source = apps) => {
+    let out = source
+    if (status !== "all") out = out.filter((a) => (a.status ?? "").toLowerCase() === status.toLowerCase())
+    if (q.trim()) {
+      const lq = q.toLowerCase()
+      out = out.filter((a) =>
+        (a.applicant_name ?? a.client_name ?? a.name ?? "").toLowerCase().includes(lq) ||
+        (a.county ?? "").toLowerCase().includes(lq)
+      )
+    }
+    setFiltered(out)
+  }
+
+  const statusCounts: Record<string, number> = { all: apps.length }
+  apps.forEach((a) => {
+    const st = (a.status ?? "").toLowerCase()
+    statusCounts[st] = (statusCounts[st] ?? 0) + 1
+  })
+
+  const kpis = [
+    { label: "Total", value: String(apps.length), color: Colors.text },
+    { label: "Pending", value: String(apps.filter((a) => ["pending", "in_review"].includes((a.status ?? "").toLowerCase())).length), color: Colors.gold },
+    { label: "Approved", value: String(apps.filter((a) => (a.status ?? "").toLowerCase() === "approved").length), color: Colors.green },
+    { label: "Denied", value: String(apps.filter((a) => (a.status ?? "").toLowerCase() === "denied").length), color: Colors.red },
+  ]
+
+  const statusTabs = ["all", "pending", "submitted", "approved", "denied", "draft"]
+
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <View>
-          <Text style={s.title}>BondApp</Text>
-          <Text style={s.subtitle}>Digital Applications</Text>
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.text} />
+        </TouchableOpacity>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.purple + "18", alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="document-text-outline" size={17} color={Colors.purple} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={s.title}>Bond Applications</Text>
+          <Text style={s.subtitle}>{apps.length} applications</Text>
         </View>
         <TouchableOpacity style={s.addBtn}>
-          <Ionicons name="send-outline" size={18} color="#fff" />
+          <Ionicons name="send-outline" size={14} color="#fff" />
+          <Text style={s.addBtnText}>Send</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Stats */}
-      <View style={s.statsRow}>
-        {[
-          { label: "Sent", value: "24", color: Colors.gold },
-          { label: "Received", value: "18", color: Colors.green },
-          { label: "Awaiting", value: "6", color: Colors.blueBright },
-          { label: "Expired", value: "3", color: Colors.red },
-        ].map((k) => (
-          <View key={k.label} style={s.statCard}>
-            <Text style={[s.statValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.statLabel}>{k.label}</Text>
+      <View style={s.kpiRow}>
+        {kpis.map((k) => (
+          <View key={k.label} style={s.kpiCard}>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Tabs */}
-      <View style={s.tabRow}>
-        {TABS.map((t, i) => (
-          <TouchableOpacity key={t} style={[s.tab, i === 0 && s.tabActive]}>
-            <Text style={[s.tabText, i === 0 && s.tabTextActive]}>{t}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Search */}
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
-        <TextInput style={s.searchInput} placeholder="Search applications..." placeholderTextColor={Colors.mutedDim} />
+        <TextInput
+          style={s.searchInput}
+          placeholder="Search applicant, county..."
+          placeholderTextColor={Colors.mutedDim}
+          value={query}
+          onChangeText={(t) => { setQuery(t); applyFilters(t, statusFilter) }}
+        />
       </View>
 
-      <FlatList
-        data={APPS}
-        keyExtractor={(i) => i.id}
-        contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}
-        showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        renderItem={({ item }) => {
-          const sc = STATUS_COLORS[item.status] ?? Colors.muted
-          return (
-            <TouchableOpacity style={s.card}>
-              <View style={s.cardTop}>
-                <View style={s.avatar}>
-                  <Text style={s.avatarText}>{item.name[0]}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.cname}>{item.name}</Text>
-                  <Text style={s.sub}>{item.county}</Text>
-                </View>
-                <View style={[s.badge, { backgroundColor: sc + "22" }]}>
-                  <Text style={[s.badgeText, { color: sc }]}>{item.status}</Text>
-                </View>
-              </View>
-              <View style={s.meta}>
-                <View style={s.metaItem}>
-                  <Ionicons name="send-outline" size={12} color={Colors.mutedDim} />
-                  <Text style={s.metaText}>Sent: {item.sent}</Text>
-                </View>
-                {item.signed && (
-                  <View style={s.metaItem}>
-                    <Ionicons name="checkmark-circle-outline" size={12} color={Colors.green} />
-                    <Text style={[s.metaText, { color: Colors.green }]}>Signed: {item.signed}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
+        {statusTabs.map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[s.tab, statusFilter === t && s.tabActive]}
+            onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
+          >
+            <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>
+              {t === "all" ? `All (${statusCounts.all})` : `${t.charAt(0).toUpperCase() + t.slice(1)} (${statusCounts[t] ?? 0})`}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {loading ? (
+        <View style={s.center}><ActivityIndicator size="large" color={Colors.blue} /></View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => String(item.id ?? Math.random())}
+          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32, gap: 10 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={s.center}>
+              <Ionicons name="document-text-outline" size={48} color={Colors.mutedDim} />
+              <Text style={s.emptyTitle}>No applications found</Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const name = item.applicant_name ?? item.client_name ?? item.name ?? "Unknown"
+            const status = item.status ?? "pending"
+            const sc = STATUS_COLORS[status] ?? STATUS_COLORS.pending
+            const date = item.submitted_at ?? item.created_at ?? item.date ?? ""
+            const county = item.county ?? ""
+            const bondAmt = item.bond_amount ?? item.amount ?? null
+            const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
+
+            return (
+              <TouchableOpacity style={s.card} activeOpacity={0.8}>
+                <View style={s.cardTop}>
+                  <View style={s.avatar}>
+                    <Text style={s.avatarText}>{initials}</Text>
                   </View>
-                )}
-                <View style={s.metaItem}>
-                  <Ionicons name="cash-outline" size={12} color={Colors.mutedDim} />
-                  <Text style={s.metaText}>{item.bond}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.appName}>{name}</Text>
+                    {!!item.id && <Text style={s.appId}>App #{item.id}</Text>}
+                  </View>
+                  <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
+                    <Text style={[s.statusText, { color: sc.text }]}>{status}</Text>
+                  </View>
                 </View>
-              </View>
-              <View style={s.actions}>
-                <TouchableOpacity style={s.actionBtn}>
-                  <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
-                  <Text style={[s.actionText, { color: Colors.blueBright }]}>View</Text>
-                </TouchableOpacity>
-                {item.status === "Sent" && (
-                  <TouchableOpacity style={s.actionBtnPrimary}>
-                    <Ionicons name="refresh-outline" size={14} color="#fff" />
-                    <Text style={s.actionTextWhite}>Resend</Text>
+
+                <View style={s.metaRow}>
+                  {!!county && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="location-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{county}</Text>
+                    </View>
+                  )}
+                  {!!date && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="calendar-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{fmtDate(date)}</Text>
+                    </View>
+                  )}
+                  {bondAmt != null && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="cash-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{fmtMoney(bondAmt)}</Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={s.cardFooter}>
+                  <TouchableOpacity style={s.footerAction}>
+                    <Ionicons name="eye-outline" size={14} color={Colors.blueBright} />
+                    <Text style={s.footerActionText}>View</Text>
                   </TouchableOpacity>
-                )}
-                {item.status === "Received" && (
-                  <TouchableOpacity style={[s.actionBtnPrimary, { backgroundColor: Colors.green }]}>
-                    <Ionicons name="person-add-outline" size={14} color="#fff" />
-                    <Text style={s.actionTextWhite}>Add Client</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </TouchableOpacity>
-          )
-        }}
-      />
+                  {["pending", "in_review"].includes(status.toLowerCase()) && (
+                    <>
+                      <TouchableOpacity style={[s.footerAction, { backgroundColor: Colors.green + "14", borderRadius: Radius.sm }]}>
+                        <Ionicons name="checkmark-outline" size={14} color={Colors.green} />
+                        <Text style={[s.footerActionText, { color: Colors.green }]}>Approve</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[s.footerAction, { backgroundColor: Colors.red + "14", borderRadius: Radius.sm }]}>
+                        <Ionicons name="close-outline" size={14} color={Colors.red} />
+                        <Text style={[s.footerActionText, { color: Colors.red }]}>Deny</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </TouchableOpacity>
+            )
+          }}
+        />
+      )}
     </SafeAreaView>
   )
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg },
-  title: { fontSize: FontSize.xl, color: Colors.text, fontWeight: "800" },
+  header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  addBtn: { width: 38, height: 38, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center" },
-  statsRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.lg },
-  statCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.md, alignItems: "center" },
-  statValue: { fontSize: FontSize.xl, fontWeight: "800" },
-  statLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 1 },
-  tabRow: { flexDirection: "row", paddingHorizontal: Spacing.xl, marginBottom: Spacing.md, gap: 6 },
-  tab: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)" },
-  tabActive: { backgroundColor: Colors.blue + "22", borderColor: Colors.blue + "66" },
-  tabText: { fontSize: FontSize.xs, color: Colors.mutedDim, fontWeight: "600" },
-  tabTextActive: { color: Colors.blueBright },
-  searchWrap: { flexDirection: "row", alignItems: "center", marginHorizontal: Spacing.xl, marginBottom: Spacing.lg, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)", paddingHorizontal: Spacing.md, height: 42, gap: Spacing.sm },
-  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.md },
-  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
+  addBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
+  kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
+  kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, color: Colors.mutedDim, marginTop: 2, textAlign: "center" },
+  searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
+  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
+  tabsScroll: { marginBottom: Spacing.md, height: 38 },
+  tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
+  tab: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  tabActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  tabText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
+  tabTextActive: { color: "#fff" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
+  emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
+  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(47,147,255,0.15)", alignItems: "center", justifyContent: "center" },
-  avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontWeight: "700" },
-  cname: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  sub: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
-  badgeText: { fontSize: 10, fontWeight: "700" },
-  meta: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.md, marginBottom: Spacing.md },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.blue + "18", alignItems: "center", justifyContent: "center" },
+  avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontFamily: Font.extrabold },
+  appName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  appId: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: Radius.sm },
+  statusText: { fontSize: 10, fontFamily: Font.bold, textTransform: "capitalize" },
+  metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
-  metaText: { fontSize: FontSize.xs, color: Colors.mutedDim },
-  actions: { flexDirection: "row", gap: 8, borderTopWidth: 1, borderTopColor: "rgba(70,120,190,0.1)", paddingTop: Spacing.md },
-  actionBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.sm, backgroundColor: Colors.blueBright + "18", borderWidth: 1, borderColor: Colors.blueBright + "33" },
-  actionText: { fontSize: FontSize.xs, fontWeight: "700" },
-  actionBtnPrimary: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.sm, backgroundColor: Colors.blue },
-  actionTextWhite: { fontSize: FontSize.xs, color: "#fff", fontWeight: "700" },
+  metaText: { fontSize: FontSize.xs, color: Colors.muted },
+  cardFooter: { flexDirection: "row", alignItems: "center", gap: 4, paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
+  footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5, paddingHorizontal: 8 },
+  footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
 })

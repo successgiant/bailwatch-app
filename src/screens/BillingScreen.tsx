@@ -1,171 +1,159 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native"
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
-import { Colors, FontSize, Radius, Spacing } from "../constants/theme"
+import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import { useAuth } from "../context/AuthContext"
+import { api } from "../lib/api"
+import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
-const HISTORY = [
-  { invoice: "INV-2026-006", date: "Jun 1, 2026", desc: "BailWatch Pro + ArrestAlert", amount: "$298.00", status: "Paid" },
-  { invoice: "INV-2026-005", date: "May 1, 2026", desc: "BailWatch Pro + ArrestAlert", amount: "$298.00", status: "Paid" },
-  { invoice: "INV-2026-004", date: "Apr 1, 2026", desc: "BailWatch Pro Platform", amount: "$99.00", status: "Paid" },
-]
-
-const PLANS = [
-  { name: "BailWatch Pro Platform", price: "$99/mo", badge: "Core", desc: "Full dashboard, clients, bonds, calendar, payments, documents, e-sign, reports.", features: ["Unlimited clients", "BondApp digital applications", "E-Sign documents", "Calendar & court tracking", "Payments & reporting"], highlight: false },
-  { name: "ArrestAlert", price: "+$199/mo", badge: "Add-On", desc: "Live booking feed and re-arrest monitoring for your county.", features: ["Live jail booking feed", "Auto re-arrest detection", "BondWatch monitoring", "Email & SMS alerts"], highlight: false },
-  { name: "BondTrack GPS", price: "+$199/mo", badge: "Add-On", desc: "Real-time GPS monitoring for clients on bond.", features: ["Real-time GPS tracking", "Geofence alerts", "Check-in compliance", "Location history"], highlight: false },
-  { name: "Complete Agency Package", price: "$449/mo", badge: "Best Value", desc: "Everything included — platform + ArrestAlert + BondTrack.", features: ["All Platform features", "ArrestAlert included", "BondTrack GPS included", "Priority support", "Save $48/mo"], highlight: true },
-]
+function fmtMoney(v: any): string {
+  if (v == null) return "—"
+  const n = parseFloat(String(v))
+  if (isNaN(n)) return "—"
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 
 export function BillingScreen() {
+  const navigation = useNavigation()
+  const { identity } = useAuth()
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!identity) return
+    api.billing(identity).then((res: any) => setData(res)).catch(() => {}).finally(() => setLoading(false))
+  }, [identity])
+
+  const subscription = data?.subscription ?? {}
+  const invoices = Array.isArray(data?.invoices) ? data.invoices : Array.isArray(data?.results) ? data.results : []
+  const plans = Array.isArray(data?.plans) ? data.plans : []
+
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <Text style={s.title}>Billing</Text>
-        <TouchableOpacity style={s.dlBtn}>
-          <Ionicons name="download-outline" size={18} color={Colors.blueBright} />
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.text} />
         </TouchableOpacity>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.green + "18", alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="card-outline" size={17} color={Colors.green} />
+        </View>
+        <Text style={s.title}>Billing</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+      {loading ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color={Colors.blue} />
+        </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}>
 
-        {/* Current Plan */}
-        <View style={s.section}>
+          {/* Current Plan */}
           <View style={s.planCard}>
-            <View style={s.planHeader}>
+            <View style={s.planTop}>
               <View>
-                <Text style={s.planName}>BailWatch Pro + ArrestAlert</Text>
-                <Text style={s.planPrice}>$298.00 / month</Text>
+                <Text style={s.planName}>{subscription.plan_name ?? subscription.name ?? "Professional"}</Text>
+                <Text style={s.planStatus}>
+                  {subscription.status ?? "Active"} · Renews {subscription.renewal_date ?? subscription.next_billing_date ? new Date(subscription.renewal_date ?? subscription.next_billing_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                </Text>
               </View>
-              <View style={s.activeBadge}><Text style={s.activeBadgeText}>Active</Text></View>
+              <Text style={s.planPrice}>{fmtMoney(subscription.monthly_amount ?? subscription.price)}<Text style={s.planPriceSub}>/mo</Text></Text>
             </View>
-            <View style={s.divider} />
-            <View style={s.planMeta}>
-              <View style={s.planMetaItem}>
-                <Text style={s.planMetaLabel}>Next Billing</Text>
-                <Text style={s.planMetaVal}>Jul 1, 2026</Text>
+            {subscription.seats != null && (
+              <View style={s.planMeta}>
+                <Ionicons name="people-outline" size={14} color={Colors.mutedDim} />
+                <Text style={s.planMetaText}>{subscription.seats} seats included</Text>
               </View>
-              <View style={s.planMetaItem}>
-                <Text style={s.planMetaLabel}>Payment</Text>
-                <Text style={s.planMetaVal}>Visa ···· 4242</Text>
-              </View>
-              <View style={s.planMetaItem}>
-                <Text style={s.planMetaLabel}>Billing Cycle</Text>
-                <Text style={s.planMetaVal}>Monthly</Text>
-              </View>
-            </View>
-            <TouchableOpacity style={s.manageBtn}>
-              <Text style={s.manageBtnText}>Manage Subscription</Text>
-              <Ionicons name="chevron-forward" size={14} color={Colors.blueBright} />
+            )}
+            <TouchableOpacity style={s.managePlanBtn}>
+              <Text style={s.managePlanText}>Manage Plan</Text>
             </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Billing History */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>Billing History</Text>
-          <View style={s.card}>
-            {HISTORY.map((h, i) => (
-              <View key={h.invoice} style={[s.row, i < HISTORY.length - 1 && s.rowBorder]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.invoiceNum}>{h.invoice}</Text>
-                  <Text style={s.invoiceDesc}>{h.desc}</Text>
-                  <Text style={s.invoiceDate}>{h.date}</Text>
-                </View>
-                <View style={s.rowRight}>
-                  <Text style={s.invoiceAmount}>{h.amount}</Text>
-                  <View style={s.paidBadge}><Text style={s.paidText}>{h.status}</Text></View>
-                  <TouchableOpacity>
-                    <Ionicons name="download-outline" size={18} color={Colors.mutedDim} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* Available Plans */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>Plans & Add-Ons</Text>
-          {PLANS.map((plan) => (
-            <View key={plan.name} style={[s.planOptionCard, plan.highlight && s.planHighlight]}>
-              <View style={s.planOptionHeader}>
-                <View style={{ flex: 1 }}>
-                  <View style={s.planBadgeRow}>
-                    <View style={[s.planBadge, { backgroundColor: plan.highlight ? Colors.gold + "22" : Colors.blue + "18" }]}>
-                      <Text style={[s.planBadgeText, { color: plan.highlight ? Colors.gold : Colors.blueBright }]}>{plan.badge}</Text>
+          {/* Invoices */}
+          {invoices.length > 0 && (
+            <>
+              <Text style={s.sectionTitle}>Billing History</Text>
+              <View style={s.table}>
+                {invoices.slice(0, 10).map((inv: any, i: number) => {
+                  const isPaid = (inv.status ?? "paid").toLowerCase() === "paid"
+                  const date = inv.date ?? inv.invoice_date ?? inv.created_at ?? ""
+                  return (
+                    <View key={inv.id ?? i} style={[s.invoiceRow, i < invoices.length - 1 && s.rowBorder]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.invoiceDesc}>{inv.description ?? inv.plan_name ?? "Subscription"}</Text>
+                        <Text style={s.invoiceDate}>{date ? new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}</Text>
+                      </View>
+                      <View style={s.invoiceRight}>
+                        <Text style={s.invoiceAmount}>{fmtMoney(inv.amount ?? inv.total)}</Text>
+                        <View style={[s.badge, { backgroundColor: isPaid ? Colors.green + "18" : Colors.gold + "18" }]}>
+                          <Text style={[s.badgeText, { color: isPaid ? Colors.green : Colors.gold }]}>{inv.status ?? "paid"}</Text>
+                        </View>
+                      </View>
                     </View>
-                  </View>
-                  <Text style={s.planOptionName}>{plan.name}</Text>
-                  <Text style={[s.planOptionPrice, { color: plan.highlight ? Colors.gold : Colors.blueBright }]}>{plan.price}</Text>
-                </View>
+                  )
+                })}
               </View>
-              <Text style={s.planDesc}>{plan.desc}</Text>
-              <View style={s.featureList}>
-                {plan.features.map((f) => (
-                  <View key={f} style={s.featureItem}>
-                    <Ionicons name="checkmark-circle" size={14} color={plan.highlight ? Colors.gold : Colors.green} />
-                    <Text style={s.featureText}>{f}</Text>
-                  </View>
-                ))}
-              </View>
-              <TouchableOpacity style={[s.planBtn, plan.highlight && s.planBtnHighlight]}>
-                <Text style={[s.planBtnText, plan.highlight && s.planBtnTextHighlight]}>
-                  {plan.highlight ? "Upgrade to Bundle" : "Add to Plan"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))}
-        </View>
+            </>
+          )}
 
-      </ScrollView>
+          {/* Available Plans */}
+          {plans.length > 0 && (
+            <>
+              <Text style={s.sectionTitle}>Available Plans</Text>
+              {plans.map((plan: any, i: number) => (
+                <View key={plan.id ?? i} style={[s.availPlan, i < plans.length - 1 && { marginBottom: 10 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.availPlanName}>{plan.name ?? plan.plan_name ?? ""}</Text>
+                    <Text style={s.availPlanDesc}>{plan.description ?? ""}</Text>
+                  </View>
+                  <View style={s.availPlanRight}>
+                    <Text style={s.availPlanPrice}>{fmtMoney(plan.price ?? plan.monthly_amount)}<Text style={s.availPlanPriceSub}>/mo</Text></Text>
+                    <TouchableOpacity style={s.selectBtn}>
+                      <Text style={s.selectBtnText}>Select</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </>
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
   )
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg },
-  title: { fontSize: FontSize.xl, color: Colors.text, fontWeight: "800" },
-  dlBtn: { width: 38, height: 38, borderRadius: Radius.md, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)", alignItems: "center", justifyContent: "center" },
-  section: { paddingHorizontal: Spacing.xl, marginBottom: Spacing.lg },
-  sectionTitle: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700", marginBottom: Spacing.sm },
-  planCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.3)", padding: Spacing.lg },
-  planHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
-  planName: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  planPrice: { fontSize: FontSize.lg, color: Colors.blueBright, fontWeight: "800", marginTop: 2 },
-  activeBadge: { backgroundColor: Colors.green + "22", paddingHorizontal: 10, paddingVertical: 3, borderRadius: Radius.sm },
-  activeBadgeText: { fontSize: FontSize.xs, color: Colors.green, fontWeight: "700" },
-  divider: { height: 1, backgroundColor: "rgba(70,120,190,0.12)", marginVertical: Spacing.md },
-  planMeta: { flexDirection: "row", gap: Spacing.lg, marginBottom: Spacing.md },
-  planMetaItem: {},
-  planMetaLabel: { fontSize: 9, color: Colors.mutedDim, fontWeight: "600", textTransform: "uppercase", marginBottom: 2 },
-  planMetaVal: { fontSize: FontSize.sm, color: Colors.text, fontWeight: "600" },
-  manageBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: Radius.sm, backgroundColor: Colors.blue + "18", borderWidth: 1, borderColor: Colors.blue + "33" },
-  manageBtnText: { fontSize: FontSize.sm, color: Colors.blueBright, fontWeight: "700" },
-  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", overflow: "hidden" },
-  row: { flexDirection: "row", alignItems: "center", padding: Spacing.lg, gap: Spacing.md },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: "rgba(70,120,190,0.08)" },
-  invoiceNum: { fontSize: FontSize.sm, color: Colors.blueBright, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  invoiceDesc: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 1 },
-  invoiceDate: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  rowRight: { alignItems: "flex-end", gap: 5 },
-  invoiceAmount: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  paidBadge: { backgroundColor: Colors.green + "22", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  paidText: { fontSize: 10, color: Colors.green, fontWeight: "700" },
-  planOptionCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg, marginBottom: 12 },
-  planHighlight: { borderColor: Colors.gold + "44", backgroundColor: "rgba(246,168,43,0.05)" },
-  planOptionHeader: { flexDirection: "row", marginBottom: Spacing.sm },
-  planBadgeRow: { flexDirection: "row", marginBottom: 6 },
-  planBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  planBadgeText: { fontSize: 9, fontWeight: "800" },
-  planOptionName: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  planOptionPrice: { fontSize: FontSize.lg, fontWeight: "800", marginTop: 2 },
-  planDesc: { fontSize: FontSize.xs, color: Colors.muted, lineHeight: 18, marginBottom: Spacing.md },
-  featureList: { gap: 6, marginBottom: Spacing.lg },
-  featureItem: { flexDirection: "row", alignItems: "center", gap: 8 },
-  featureText: { fontSize: FontSize.xs, color: Colors.muted },
-  planBtn: { paddingVertical: 10, borderRadius: Radius.sm, backgroundColor: "rgba(70,120,190,0.12)", borderWidth: 1, borderColor: "rgba(70,120,190,0.25)", alignItems: "center" },
-  planBtnHighlight: { backgroundColor: Colors.gold, borderColor: Colors.gold },
-  planBtnText: { fontSize: FontSize.sm, color: Colors.blueBright, fontWeight: "700" },
-  planBtnTextHighlight: { color: "#000" },
+  header: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
+  planCard: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.3)", padding: Spacing.xl, marginBottom: Spacing.xl },
+  planTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: Spacing.md },
+  planName: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
+  planStatus: { fontSize: FontSize.xs, color: Colors.green, marginTop: 4 },
+  planPrice: { fontSize: FontSize.xxl, color: Colors.blueBright, fontFamily: Font.extrabold },
+  planPriceSub: { fontSize: FontSize.sm, color: Colors.mutedDim },
+  planMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: Spacing.lg },
+  planMetaText: { fontSize: FontSize.sm, color: Colors.mutedDim },
+  managePlanBtn: { paddingVertical: 10, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.3)", alignItems: "center" },
+  managePlanText: { fontSize: FontSize.sm, color: Colors.blueBright, fontFamily: Font.bold },
+  sectionTitle: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold, marginBottom: Spacing.md },
+  table: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", overflow: "hidden", marginBottom: Spacing.xl },
+  invoiceRow: { flexDirection: "row", alignItems: "center", padding: Spacing.lg },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: "rgba(70,120,190,0.1)" },
+  invoiceDesc: { fontSize: FontSize.sm, color: Colors.text, fontFamily: Font.semibold },
+  invoiceDate: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
+  invoiceRight: { alignItems: "flex-end", gap: 4 },
+  invoiceAmount: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.sm },
+  badgeText: { fontSize: 10, fontFamily: Font.bold },
+  availPlan: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg, flexDirection: "row", alignItems: "center", gap: Spacing.md },
+  availPlanName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  availPlanDesc: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
+  availPlanRight: { alignItems: "flex-end", gap: 8 },
+  availPlanPrice: { fontSize: FontSize.lg, color: Colors.blueBright, fontFamily: Font.extrabold },
+  availPlanPriceSub: { fontSize: FontSize.xs, color: Colors.mutedDim },
+  selectBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center" },
+  selectBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
 })

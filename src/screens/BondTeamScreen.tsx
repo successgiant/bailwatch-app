@@ -1,138 +1,175 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
-import { Colors, FontSize, Radius, Spacing } from "../constants/theme"
-
-const TEAM = [
-  { id: "1", name: "John Smith", role: "Owner", email: "john@bailwatchpro.com", phone: "(214) 555-0101", status: "Active", bonds: 18, revenue: "$42,000" },
-  { id: "2", name: "Maria Garcia", role: "Senior Agent", email: "maria@bailwatchpro.com", phone: "(214) 555-0102", status: "Active", bonds: 12, revenue: "$31,200" },
-  { id: "3", name: "David Lee", role: "Agent", email: "david@bailwatchpro.com", phone: "(214) 555-0103", status: "Active", bonds: 6, revenue: "$20,800" },
-  { id: "4", name: "Ashley Brown", role: "Agent", email: "ashley@bailwatchpro.com", phone: "(214) 555-0104", status: "Inactive", bonds: 0, revenue: "$0" },
-]
+import { useEffect, useState } from "react"
+import { useNavigation } from "@react-navigation/native"
+import { useAuth } from "../context/AuthContext"
+import { api } from "../lib/api"
+import { Colors, Font, FontSize, Radius, Spacing } from "../constants/theme"
 
 const ROLE_COLORS: Record<string, string> = {
-  Owner: Colors.gold,
-  Manager: Colors.blue,
-  "Senior Agent": Colors.blueBright,
-  Agent: Colors.muted,
+  admin: Colors.gold, Admin: Colors.gold,
+  owner: Colors.gold, Owner: Colors.gold,
+  agent: Colors.blueBright, Agent: Colors.blueBright,
+  viewer: Colors.mutedDim, Viewer: Colors.mutedDim,
 }
 
 export function BondTeamScreen() {
+  const navigation = useNavigation()
+  const { identity } = useAuth()
+  const [team, setTeam] = useState<any[]>([])
+  const [filtered, setFiltered] = useState<any[]>([])
+  const [query, setQuery] = useState("")
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!identity) return
+    api.team(identity).then((res: any) => {
+      const list = res?.results ?? res?.data ?? res
+      setTeam(Array.isArray(list) ? list : [])
+      setFiltered(Array.isArray(list) ? list : [])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }, [identity])
+
+  const handleSearch = (text: string) => {
+    setQuery(text)
+    if (!text.trim()) { setFiltered(team); return }
+    const q = text.toLowerCase()
+    setFiltered(team.filter(m =>
+      (m.full_name ?? m.name ?? m.username ?? "").toLowerCase().includes(q) ||
+      (m.email ?? "").toLowerCase().includes(q)
+    ))
+  }
+
+  const stats = {
+    total: team.length,
+    active: team.filter(m => m.is_active !== false && m.status !== "inactive").length,
+    agents: team.filter(m => (m.role ?? "agent").toLowerCase() === "agent").length,
+  }
+
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <View>
-          <Text style={s.title}>BondTeam</Text>
-          <Text style={s.subtitle}>Agents & Team</Text>
+        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="chevron-back" size={22} color={Colors.text} />
+        </TouchableOpacity>
+        <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.purple + "18", alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="people-outline" size={17} color={Colors.purple} />
         </View>
-        <TouchableOpacity style={s.addBtn}>
-          <Ionicons name="person-add-outline" size={18} color="#fff" />
+        <Text style={[s.title, { flex: 1 }]}>BondTeam</Text>
+        <TouchableOpacity style={s.inviteBtn}>
+          <Ionicons name="person-add-outline" size={16} color="#fff" />
+          <Text style={s.inviteBtnText}>Invite</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Stats */}
       <View style={s.statsRow}>
         {[
-          { label: "Total Agents", value: "4", color: Colors.text },
-          { label: "Active", value: "3", color: Colors.green },
-          { label: "Inactive", value: "1", color: Colors.mutedDim },
-        ].map((k) => (
-          <View key={k.label} style={s.statCard}>
-            <Text style={[s.statValue, { color: k.color }]}>{k.value}</Text>
-            <Text style={s.statLabel}>{k.label}</Text>
+          { label: "Total Members", value: String(stats.total), color: Colors.text },
+          { label: "Active", value: String(stats.active), color: Colors.green },
+          { label: "Agents", value: String(stats.agents), color: Colors.blueBright },
+        ].map(s2 => (
+          <View key={s2.label} style={s.statCard}>
+            <Text style={[s.statValue, { color: s2.color }]}>{s2.value}</Text>
+            <Text style={s.statLabel}>{s2.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Performance table */}
-      <View style={s.section}>
-        <Text style={s.sectionTitle}>Performance</Text>
-        <View style={s.card}>
-          <View style={s.tableHeader}>
-            <Text style={[s.th, { flex: 2 }]}>Agent</Text>
-            <Text style={s.th}>Bonds</Text>
-            <Text style={s.th}>Revenue</Text>
-          </View>
-          {TEAM.filter(a => a.status === "Active").map((a, i) => (
-            <View key={a.id} style={[s.tableRow, i < 2 && s.rowBorder]}>
-              <View style={[{ flex: 2, flexDirection: "row", alignItems: "center", gap: 8 }]}>
-                <View style={s.avatar}>
-                  <Text style={s.avatarText}>{a.name[0]}</Text>
-                </View>
-                <Text style={[s.td, { color: Colors.text }]}>{a.name}</Text>
-              </View>
-              <Text style={[s.td, { color: Colors.blueBright }]}>{a.bonds}</Text>
-              <Text style={[s.td, { color: Colors.green }]}>{a.revenue}</Text>
-            </View>
-          ))}
-        </View>
+      <View style={s.searchWrap}>
+        <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
+        <TextInput style={s.searchInput} placeholder="Search team..." placeholderTextColor={Colors.mutedDim} value={query} onChangeText={handleSearch} />
       </View>
 
-      {/* Roster */}
-      <View style={s.section}>
-        <Text style={s.sectionTitle}>Agent Roster</Text>
-        <View style={s.card}>
-          {TEAM.map((agent, i) => (
-            <View key={agent.id} style={[s.agentRow, i < TEAM.length - 1 && s.rowBorder]}>
-              <View style={s.avatar}>
-                <Text style={s.avatarText}>{agent.name[0]}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={s.agentNameRow}>
-                  <Text style={s.agentName}>{agent.name}</Text>
-                  <View style={[s.roleBadge, { backgroundColor: (ROLE_COLORS[agent.role] ?? Colors.muted) + "22" }]}>
-                    <Text style={[s.roleText, { color: ROLE_COLORS[agent.role] ?? Colors.muted }]}>{agent.role}</Text>
+      {loading ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color={Colors.blue} />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => String(item.id ?? Math.random())}
+          contentContainerStyle={{ paddingHorizontal: Spacing.xl, paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={<Text style={s.empty}>No team members found.</Text>}
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+          renderItem={({ item }) => {
+            const name = item.full_name ?? item.name ?? item.username ?? "Unknown"
+            const email = item.email ?? ""
+            const role = item.role ?? "agent"
+            const rc = ROLE_COLORS[role] ?? Colors.mutedDim
+            const isActive = item.is_active !== false && item.status !== "inactive"
+            const bondsCount = item.bond_count ?? item.bonds ?? null
+            return (
+              <View style={s.card}>
+                <View style={s.cardTop}>
+                  <View style={s.avatar}>
+                    <Text style={s.avatarText}>{name[0]?.toUpperCase() ?? "?"}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.memberName}>{name}</Text>
+                    {!!email && <Text style={s.email}>{email}</Text>}
+                  </View>
+                  <View style={s.badges}>
+                    <View style={[s.badge, { backgroundColor: rc + "22" }]}>
+                      <Text style={[s.badgeText, { color: rc }]}>{role}</Text>
+                    </View>
+                    <View style={[s.badge, { backgroundColor: isActive ? Colors.green + "18" : Colors.red + "18" }]}>
+                      <Text style={[s.badgeText, { color: isActive ? Colors.green : Colors.red }]}>{isActive ? "Active" : "Inactive"}</Text>
+                    </View>
                   </View>
                 </View>
-                <Text style={s.agentEmail}>{agent.email}</Text>
-                <Text style={s.agentPhone}>{agent.phone}</Text>
+                <View style={s.footer}>
+                  {bondsCount != null && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="shield-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{bondsCount} bonds</Text>
+                    </View>
+                  )}
+                  <View style={s.actions}>
+                    <TouchableOpacity style={s.actionBtn}>
+                      <Ionicons name="create-outline" size={16} color={Colors.blueBright} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[s.actionBtn, { backgroundColor: Colors.red + "12" }]}>
+                      <Ionicons name="trash-outline" size={16} color={Colors.red} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
-              <View style={s.agentActions}>
-                <View style={[s.statusDot, { backgroundColor: agent.status === "Active" ? Colors.green : Colors.mutedDim }]} />
-                <TouchableOpacity style={s.iconBtn}>
-                  <Ionicons name="create-outline" size={18} color={Colors.mutedDim} />
-                </TouchableOpacity>
-                <TouchableOpacity style={s.iconBtn}>
-                  <Ionicons name="trash-outline" size={18} color={Colors.red} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-
+            )
+          }}
+        />
+      )}
     </SafeAreaView>
   )
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg },
-  title: { fontSize: FontSize.xl, color: Colors.text, fontWeight: "800" },
-  subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  addBtn: { width: 38, height: 38, borderRadius: Radius.md, backgroundColor: Colors.blue, alignItems: "center", justifyContent: "center" },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: Spacing.md, marginHorizontal: Spacing.xl, marginVertical: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  backBtn: { width: 36, height: 36, borderRadius: Radius.md, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  title: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.extrabold },
+  inviteBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: Radius.sm, backgroundColor: Colors.blue },
+  inviteBtnText: { fontSize: FontSize.xs, color: "#fff", fontFamily: Font.bold },
   statsRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.lg },
   statCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.md, alignItems: "center" },
-  statValue: { fontSize: FontSize.xl, fontWeight: "800" },
-  statLabel: { fontSize: 10, color: Colors.mutedDim, marginTop: 2 },
-  section: { paddingHorizontal: Spacing.xl, marginBottom: Spacing.lg },
-  sectionTitle: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700", marginBottom: Spacing.sm },
-  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", overflow: "hidden" },
-  tableHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, borderBottomWidth: 1, borderBottomColor: "rgba(70,120,190,0.15)" },
-  th: { flex: 1, fontSize: 10, color: Colors.mutedDim, fontWeight: "700", textTransform: "uppercase" },
-  tableRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: "rgba(70,120,190,0.08)" },
-  td: { flex: 1, fontSize: FontSize.xs, color: Colors.muted, fontWeight: "500" },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(47,147,255,0.15)", alignItems: "center", justifyContent: "center" },
-  avatarText: { fontSize: FontSize.sm, color: Colors.blueBright, fontWeight: "700" },
-  agentRow: { flexDirection: "row", alignItems: "center", padding: Spacing.lg, gap: Spacing.md },
-  agentNameRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 3 },
-  agentName: { fontSize: FontSize.md, color: Colors.text, fontWeight: "700" },
-  roleBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
-  roleText: { fontSize: 9, fontWeight: "700" },
-  agentEmail: { fontSize: FontSize.xs, color: Colors.mutedDim },
-  agentPhone: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
-  agentActions: { flexDirection: "row", alignItems: "center", gap: 4 },
-  statusDot: { width: 7, height: 7, borderRadius: 4 },
-  iconBtn: { padding: 4 },
+  statValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  statLabel: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1, textAlign: "center" },
+  searchWrap: { flexDirection: "row", alignItems: "center", marginHorizontal: Spacing.xl, marginBottom: Spacing.lg, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: "rgba(70,120,190,0.2)", paddingHorizontal: Spacing.md, height: 42, gap: Spacing.sm },
+  searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.md },
+  empty: { textAlign: "center", color: Colors.mutedDim, marginTop: 40, fontSize: FontSize.md },
+  card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: "rgba(70,120,190,0.18)", padding: Spacing.lg },
+  cardTop: { flexDirection: "row", alignItems: "center", gap: Spacing.md, marginBottom: Spacing.md },
+  avatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(47,147,255,0.15)", alignItems: "center", justifyContent: "center" },
+  avatarText: { fontSize: FontSize.md, color: Colors.blueBright, fontFamily: Font.bold },
+  memberName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  email: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 1 },
+  badges: { gap: 5 },
+  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
+  badgeText: { fontSize: 10, fontFamily: Font.bold },
+  footer: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: "rgba(70,120,190,0.1)", paddingTop: Spacing.md },
+  metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  metaText: { fontSize: FontSize.xs, color: Colors.mutedDim },
+  actions: { flexDirection: "row", gap: 8 },
+  actionBtn: { width: 32, height: 32, borderRadius: Radius.sm, backgroundColor: "rgba(70,120,190,0.1)", alignItems: "center", justifyContent: "center" },
 })
