@@ -2,6 +2,7 @@ import { NavigationContainer } from "@react-navigation/native"
 import { StatusBar } from "expo-status-bar"
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { View, ActivityIndicator, Text } from "react-native"
+import { useEffect, useRef } from "react"
 import {
   useFonts,
   Inter_400Regular,
@@ -14,6 +15,8 @@ import { AuthProvider, useAuth } from "./src/context/AuthContext"
 import { TabNavigator } from "./src/navigation/TabNavigator"
 import { AuthNavigator } from "./src/navigation/AuthNavigator"
 import { Colors } from "./src/constants/theme"
+import { setupNotifications } from "./src/lib/notifications"
+import { registerPollers, seedSeenBookings, seedSeenRearrests } from "./src/lib/bookingPoller"
 
 // Apply Inter as the default font for all Text components
 ;(Text as any).defaultProps = (Text as any).defaultProps ?? {}
@@ -21,6 +24,20 @@ import { Colors } from "./src/constants/theme"
 
 function AppNavigator() {
   const { identity, isLoaded } = useAuth()
+  const initialized = useRef(false)
+
+  useEffect(() => {
+    if (!identity || initialized.current) return
+    initialized.current = true
+
+    // Request permission + register background pollers once after login
+    setupNotifications().then((granted) => {
+      if (!granted) return
+      registerPollers()
+      seedSeenBookings(identity)
+      seedSeenRearrests(identity)
+    })
+  }, [identity])
 
   if (!isLoaded) {
     return (
