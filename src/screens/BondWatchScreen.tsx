@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Linking } from "react-native"
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Alert, Linking, ScrollView } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons"
 import { useEffect, useState } from "react"
@@ -18,24 +18,25 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   active: { bg: Colors.green + "18", text: Colors.green },
   ALERT: { bg: Colors.red + "18", text: Colors.red },
   alert: { bg: Colors.red + "18", text: Colors.red },
-  "Re-Arrested": { bg: Colors.red + "22", text: Colors.red },
   Inactive: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
   inactive: { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
 }
 
-const AVATAR_COLORS = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#dc2626", "#0891b2"]
-function avatarColor(s: string): string {
-  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+const AVATAR_COLORS = [Colors.blue, Colors.purple, Colors.green, Colors.gold, Colors.red, Colors.blueSky]
+function avatarColor(name: string): string {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
 }
+
+const RISK_FILTERS = ["All", "High Risk", "Alert", "Active"]
 
 export function BondWatchScreen() {
   const navigation = useNavigation()
   const { identity } = useAuth()
   const [clients, setClients] = useState<any[]>([])
   const [filtered, setFiltered] = useState<any[]>([])
-  const [alertItems, setAlertItems] = useState<any[]>([])
   const [query, setQuery] = useState("")
+  const [riskFilter, setRiskFilter] = useState("All")
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [resolvingId, setResolvingId] = useState<number | null>(null)
@@ -44,16 +45,13 @@ export function BondWatchScreen() {
     if (!identity) return
     if (!quiet) setLoading(true)
     try {
-      const [cl, al] = await Promise.all([
+      const [cl] = await Promise.all([
         api.bondwatch.clients(identity).catch(() => null),
-        api.bondwatch.alerts(identity).catch(() => null),
       ])
       const clientList = cl?.results ?? cl?.data ?? cl
       const arr = Array.isArray(clientList) ? clientList : []
       setClients(arr)
-      setFiltered(arr)
-      const alertList = al?.results ?? al?.data ?? al
-      setAlertItems(Array.isArray(alertList) ? alertList : [])
+      applyFilters(query, riskFilter, arr)
     } catch {} finally {
       setLoading(false)
       setRefreshing(false)
@@ -62,18 +60,38 @@ export function BondWatchScreen() {
 
   useEffect(() => { load() }, [identity])
 
+  const applyFilters = (q: string, rf: string, source: any[] = clients) => {
+    let out = source
+    if (rf === "High Risk") {
+      out = out.filter((c) => (c.riskLevel ?? c.risk_level ?? "").toLowerCase() === "high")
+    } else if (rf === "Alert") {
+      out = out.filter((c) => ["ALERT", "alert", "Re-Arrested"].includes(c.status ?? "") || (c.isReArrested ?? c.is_rearrested))
+    } else if (rf === "Active") {
+      out = out.filter((c) => ["Active", "active"].includes(c.status ?? ""))
+    }
+    if (q.trim()) {
+      const lq = q.toLowerCase()
+      out = out.filter((c) =>
+        (c.name ?? c.client_name ?? c.full_name ?? "").toLowerCase().includes(lq) ||
+        (c.caseNumber ?? c.case_number ?? c.booking_number ?? "").toLowerCase().includes(lq) ||
+        (c.county ?? "").toLowerCase().includes(lq)
+      )
+    }
+    setFiltered(out)
+  }
+
   const handleResolve = async (item: any) => {
     if (!identity) return
-    Alert.alert("Resolve Alert", `Mark re-arrest alert for ${item.full_name ?? item.name ?? "this client"} as resolved?`, [
+    const name = item.name ?? item.client_name ?? item.full_name ?? "this client"
+    Alert.alert("Resolve Alert", `Mark re-arrest alert for ${name} as resolved?`, [
       { text: "Cancel", style: "cancel" },
       { text: "Resolve", onPress: async () => {
         setResolvingId(item.id)
         try {
           await api.bondwatch.clear(identity, { client_id: item.id })
-          const updated = clients.map((c) => c.id === item.id ? { ...c, status: "Active", is_rearrested: false } : c)
+          const updated = clients.map((c) => c.id === item.id ? { ...c, status: "Active", is_rearrested: false, isReArrested: false } : c)
           setClients(updated)
-          const q = query
-          setFiltered(q ? updated.filter((c) => (c.full_name ?? c.name ?? "").toLowerCase().includes(q.toLowerCase())) : updated)
+          applyFilters(query, riskFilter, updated)
         } catch (e: any) {
           Alert.alert("Error", e?.message ?? "Could not resolve alert")
         } finally { setResolvingId(null) }
@@ -81,35 +99,30 @@ export function BondWatchScreen() {
     ])
   }
 
-  const handleCall = (phone: string) => {
-    if (!phone) return
-    Linking.openURL(`tel:${phone}`)
-  }
-
   const handleSearch = (text: string) => {
     setQuery(text)
-    if (!text.trim()) { setFiltered(clients); return }
-    const q = text.toLowerCase()
-    setFiltered(clients.filter((c) =>
-      (c.full_name ?? c.name ?? "").toLowerCase().includes(q) ||
-      (c.case_number ?? "").toLowerCase().includes(q) ||
-      (c.county ?? "").toLowerCase().includes(q)
-    ))
+    applyFilters(text, riskFilter)
   }
 
-  const reArrested = clients.filter((c) => c.status === "ALERT" || c.status === "Re-Arrested" || c.is_rearrested)
-  const active = clients.filter((c) => ["Active", "active"].includes(c.status ?? ""))
+  const handleRiskFilter = (rf: string) => {
+    setRiskFilter(rf)
+    applyFilters(query, rf)
+  }
 
-  const kpis = [
-    { label: "Monitored", value: String(clients.length), color: Colors.text },
-    { label: "Active", value: String(active.length), color: Colors.green },
-    { label: "Alerts", value: String(reArrested.length), color: Colors.red },
-    { label: "Low Risk", value: String(clients.filter((c) => (c.risk_level ?? "low").toLowerCase() === "low").length), color: Colors.green },
+  const totalMonitored = clients.length
+  const activeCount = clients.filter((c) => ["Active", "active"].includes(c.status ?? "")).length
+  const alertCount = clients.filter((c) => ["ALERT", "alert", "Re-Arrested"].includes(c.status ?? "") || (c.isReArrested ?? c.is_rearrested)).length
+  const inactiveCount = clients.filter((c) => ["Inactive", "inactive"].includes(c.status ?? "")).length
+
+  const kpiItems = [
+    { label: "Monitored", value: String(totalMonitored), color: Colors.text },
+    { label: "Active", value: String(activeCount), color: Colors.green },
+    { label: "ALERT", value: String(alertCount), color: Colors.red },
+    { label: "Inactive", value: String(inactiveCount), color: Colors.mutedDim },
   ]
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      {/* Header */}
       <View style={s.header}>
         <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={22} color={Colors.text} />
@@ -127,33 +140,28 @@ export function BondWatchScreen() {
         </View>
       </View>
 
-      {/* KPI Row */}
       <View style={s.kpiRow}>
-        {kpis.map((k) => (
+        {kpiItems.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={s.kpiValue}>{k.value}</Text>
-            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Alert Banner */}
-      {reArrested.length > 0 && (
+      {alertCount > 0 && (
         <View style={s.alertBanner}>
           <Ionicons name="warning" size={16} color={Colors.red} />
           <View style={{ flex: 1 }}>
-            <Text style={s.alertBannerTitle}>{reArrested.length} Re-Arrest Alert{reArrested.length > 1 ? "s" : ""}</Text>
+            <Text style={s.alertBannerTitle}>{alertCount} Re-Arrest Alert{alertCount > 1 ? "s" : ""}</Text>
             <Text style={s.alertBannerText} numberOfLines={1}>
-              {reArrested.map((c) => c.full_name ?? c.name ?? "Unknown").join(", ")}
+              {clients.filter((c) => ["ALERT", "alert", "Re-Arrested"].includes(c.status ?? "") || (c.isReArrested ?? c.is_rearrested))
+                .map((c) => c.name ?? c.client_name ?? c.full_name ?? "Unknown").join(", ")}
             </Text>
           </View>
-          <TouchableOpacity style={s.alertBannerBtn} onPress={() => Alert.alert("Alerts", reArrested.map((c) => c.full_name ?? c.name ?? "Unknown").join("\n"))}>
-            <Text style={s.alertBannerBtnText}>View All</Text>
-          </TouchableOpacity>
         </View>
       )}
 
-      {/* Search */}
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
         <TextInput
@@ -169,6 +177,18 @@ export function BondWatchScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterScroll} contentContainerStyle={s.filterRow}>
+        {RISK_FILTERS.map((rf) => (
+          <TouchableOpacity
+            key={rf}
+            style={[s.filterChip, riskFilter === rf && s.filterChipActive]}
+            onPress={() => handleRiskFilter(rf)}
+          >
+            <Text style={[s.filterChipText, riskFilter === rf && s.filterChipTextActive]}>{rf}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
       {loading ? (
         <View style={s.center}>
@@ -189,16 +209,18 @@ export function BondWatchScreen() {
             </View>
           }
           renderItem={({ item }) => {
-            const name = item.full_name ?? item.name ?? "Unknown"
+            const name = item.name ?? item.client_name ?? item.full_name ?? "Unknown"
+            const caseNumber = item.caseNumber ?? item.case_number ?? item.booking_number ?? ""
             const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
             const acColor = avatarColor(name)
             const status = item.status ?? "Active"
             const sc = STATUS_COLORS[status] ?? { bg: Colors.mutedDim + "18", text: Colors.mutedDim }
-            const riskLevel = item.risk_level ?? "Low"
-            const riskScore = item.risk_score ?? null
+            const riskLevel = item.riskLevel ?? item.risk_level ?? "Low"
+            const riskScore = item.riskScore ?? item.risk_score ?? 0
             const riskColor = RISK_COLORS[riskLevel] ?? Colors.muted
-            const isAlert = ["ALERT", "Re-Arrested"].includes(status) || item.is_rearrested
-            const lastCheck = item.last_check ?? item.last_checkin ?? item.updated_at ?? ""
+            const isReArrested = item.isReArrested ?? item.is_rearrested ?? false
+            const isAlert = ["ALERT", "Re-Arrested"].includes(status) || isReArrested
+            const lastCheck = item.lastCheck ?? item.last_check ?? item.updated_at ?? ""
             const coverage: string[] = Array.isArray(item.coverage) ? item.coverage : []
 
             return (
@@ -208,9 +230,16 @@ export function BondWatchScreen() {
                     <Text style={[s.avatarText, { color: acColor }]}>{initials}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={s.clientName}>{name}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <Text style={s.clientName}>{name}</Text>
+                      {isReArrested && (
+                        <View style={s.rearrestedBadge}>
+                          <Text style={s.rearrestedText}>RE-ARRESTED</Text>
+                        </View>
+                      )}
+                    </View>
                     <View style={s.metaInline}>
-                      {!!item.case_number && <Text style={s.caseNum}>#{item.case_number}</Text>}
+                      {!!caseNumber && <Text style={s.caseNum}>#{caseNumber}</Text>}
                       {!!item.county && <Text style={s.county}>{item.county}</Text>}
                     </View>
                   </View>
@@ -220,7 +249,7 @@ export function BondWatchScreen() {
                     </View>
                     <View style={{ alignItems: "flex-end" }}>
                       <Text style={[s.riskLabel, { color: riskColor }]}>{riskLevel}</Text>
-                      {riskScore != null && (
+                      {riskScore > 0 && (
                         <Text style={[s.riskScore, { color: riskColor }]}>{riskScore}</Text>
                       )}
                     </View>
@@ -248,14 +277,17 @@ export function BondWatchScreen() {
                     </View>
                   )}
                   <View style={{ flex: 1 }} />
-                  <TouchableOpacity style={s.actionBtn} onPress={() => handleCall(item.phone ?? item.contact_phone ?? "")}>
+                  <TouchableOpacity style={s.actionBtn} onPress={() => {
+                    const phone = item.phone ?? item.contact_phone ?? ""
+                    if (phone) Linking.openURL(`tel:${phone}`)
+                  }}>
                     <Ionicons name="call-outline" size={14} color={Colors.mutedDim} />
                   </TouchableOpacity>
                   {isAlert && (
                     <TouchableOpacity style={s.resolveBtn} onPress={() => handleResolve(item)} disabled={resolvingId === item.id}>
                       {resolvingId === item.id
                         ? <ActivityIndicator size="small" color={Colors.green} />
-                        : <Text style={s.resolveBtnText}>Resolve</Text>
+                        : <Text style={s.resolveBtnText}>Clear</Text>
                       }
                     </TouchableOpacity>
                   )}
@@ -280,15 +312,19 @@ const s = StyleSheet.create({
   liveText: { fontSize: 10, color: Colors.green, fontFamily: Font.bold, letterSpacing: 1 },
   kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
-  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center", color: Colors.mutedDim },
   alertBanner: { flexDirection: "row", alignItems: "center", gap: Spacing.sm, marginHorizontal: Spacing.xl, marginBottom: Spacing.md, backgroundColor: Colors.red + "12", borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.red + "30", padding: Spacing.lg },
   alertBannerTitle: { fontSize: FontSize.sm, color: Colors.red, fontFamily: Font.bold },
   alertBannerText: { fontSize: FontSize.xs, color: Colors.red + "aa", marginTop: 2 },
-  alertBannerBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.red + "40" },
-  alertBannerBtnText: { fontSize: FontSize.xs, color: Colors.red, fontFamily: Font.bold },
-  searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.md, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
+  searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
+  filterScroll: { marginBottom: Spacing.md, height: 38 },
+  filterRow: { paddingHorizontal: Spacing.xl, gap: 8 },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  filterChipActive: { backgroundColor: Colors.blue, borderColor: Colors.blue },
+  filterChipText: { fontSize: FontSize.xs, color: Colors.muted, fontFamily: Font.semibold },
+  filterChipTextActive: { color: Colors.text },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   emptyText: { fontSize: FontSize.sm, color: Colors.mutedDim },
@@ -298,6 +334,8 @@ const s = StyleSheet.create({
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   avatarText: { fontSize: FontSize.md, fontFamily: Font.extrabold },
   clientName: { fontSize: FontSize.md, color: Colors.text, fontFamily: Font.bold },
+  rearrestedBadge: { backgroundColor: Colors.red + "20", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  rearrestedText: { fontSize: 9, color: Colors.red, fontFamily: Font.bold, letterSpacing: 0.5 },
   metaInline: { flexDirection: "row", gap: 8, marginTop: 3 },
   caseNum: { fontSize: FontSize.xs, color: Colors.mutedDim },
   county: { fontSize: FontSize.xs, color: Colors.muted },

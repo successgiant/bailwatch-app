@@ -33,18 +33,27 @@ function daysUntil(d: string): number {
   } catch { return Infinity }
 }
 
-const COURT_TYPE_COLORS: Record<string, { bg: string; text: string }> = {
-  hearing: { bg: Colors.blue + "18", text: Colors.blueBright },
-  Hearing: { bg: Colors.blue + "18", text: Colors.blueBright },
-  trial: { bg: Colors.purple + "18", text: Colors.purple },
-  Trial: { bg: Colors.purple + "18", text: Colors.purple },
-  arraignment: { bg: Colors.gold + "18", text: Colors.gold },
-  Arraignment: { bg: Colors.gold + "18", text: Colors.gold },
-  sentencing: { bg: Colors.orange + "18", text: Colors.orange },
-  Sentencing: { bg: Colors.orange + "18", text: Colors.orange },
-  bond_review: { bg: Colors.green + "18", text: Colors.green },
-  "Bond Review": { bg: Colors.green + "18", text: Colors.green },
+function todayStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 }
+
+const EVENT_TYPE_COLORS: Record<string, { bg: string; text: string }> = {
+  "Court Date":  { bg: Colors.blue + "18", text: Colors.blueBright },
+  "Check-In":    { bg: Colors.purple + "18", text: Colors.purple },
+  "Payment Due": { bg: Colors.gold + "18", text: Colors.gold },
+  "Meeting":     { bg: Colors.green + "18", text: Colors.green },
+  "Other":       { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+}
+
+const STATUS_BADGE_COLORS: Record<string, { bg: string; text: string }> = {
+  completed: { bg: Colors.green + "18", text: Colors.green },
+  missed:    { bg: Colors.red + "18", text: Colors.red },
+  today:     { bg: Colors.blue + "18", text: Colors.blueBright },
+  upcoming:  { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+}
+
+const EVENT_TYPES = ["Court Date", "Check-In", "Payment Due", "Meeting", "Other"]
 
 export function CalendarScreen() {
   const { identity } = useAuth()
@@ -54,7 +63,17 @@ export function CalendarScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
-  const [addForm, setAddForm] = useState({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", hearing_type: "Hearing", notes: "" })
+  const [addForm, setAddForm] = useState({
+    client_name: "",
+    court_date: "",
+    court_time: "",
+    court_name: "",
+    county: "",
+    event_type: "Court Date",
+    judge: "",
+    address: "",
+    notes: "",
+  })
   const [adding, setAdding] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
@@ -65,7 +84,7 @@ export function CalendarScreen() {
       const res: any = await api.courtDates(identity, { page_size: "50" })
       const raw = res?.data ?? res?.results ?? res
       const arr = Array.isArray(raw) ? raw : []
-      const sorted = arr.sort((a: any, b: any) => new Date(a.court_date ?? a.date ?? "").getTime() - new Date(b.court_date ?? b.date ?? "").getTime())
+      const sorted = arr.sort((a: any, b: any) => new Date(a.event_date ?? a.court_date ?? a.date ?? "").getTime() - new Date(b.event_date ?? b.court_date ?? b.date ?? "").getTime())
       setEvents(sorted)
       applyFilter(activeFilter, sorted)
     } catch {} finally {
@@ -83,9 +102,13 @@ export function CalendarScreen() {
     }
     setAdding(true)
     try {
-      await api.createCourtDate(identity, addForm)
+      const payload = {
+        ...addForm,
+        court: addForm.court_name,
+      }
+      await api.createCourtDate(identity, payload)
       setShowAdd(false)
-      setAddForm({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", hearing_type: "Hearing", notes: "" })
+      setAddForm({ client_name: "", court_date: "", court_time: "", court_name: "", county: "", event_type: "Court Date", judge: "", address: "", notes: "" })
       load()
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Could not add court date")
@@ -94,7 +117,7 @@ export function CalendarScreen() {
 
   const handleDelete = (item: any) => {
     if (!identity) return
-    Alert.alert("Delete Court Date", `Remove court date for ${item.client_name ?? item.defendant_name ?? "this client"}?`, [
+    Alert.alert("Delete Event", `Remove this event for ${item.defendant_name ?? item.client_name ?? item.name ?? "this client"}?`, [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: async () => {
         setDeletingId(item.id)
@@ -110,44 +133,56 @@ export function CalendarScreen() {
     ])
   }
 
+  const getEventDate = (item: any) => item.event_date ?? item.court_date ?? item.date ?? ""
+  const getEventStatus = (item: any): string => {
+    if (item.status) return item.status
+    const days = daysUntil(getEventDate(item))
+    if (days === 0) return "today"
+    if (days < 0) return "upcoming"
+    return "upcoming"
+  }
+
   const applyFilter = (filter: string, source = events) => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
+    const td = todayStr()
     let out = source
-    if (filter === "upcoming") {
-      out = source.filter((e) => new Date(e.court_date ?? e.date ?? "") >= today)
-    } else if (filter === "today") {
-      out = source.filter((e) => daysUntil(e.court_date ?? e.date ?? "") === 0)
-    } else if (filter === "week") {
-      out = source.filter((e) => { const d = daysUntil(e.court_date ?? e.date ?? ""); return d >= 0 && d <= 7 })
-    } else if (filter === "past") {
-      out = source.filter((e) => new Date(e.court_date ?? e.date ?? "") < today)
+    if (filter === "today") {
+      out = source.filter((e) => getEventDate(e).slice(0, 10) === td)
+    } else if (filter === "upcoming") {
+      out = source.filter((e) => {
+        const d = getEventDate(e).slice(0, 10)
+        return d >= td && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
+      })
+    } else if (filter === "missed") {
+      out = source.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < td && (e.status ?? "") !== "completed"))
     }
     setFiltered(out)
     setActiveFilter(filter)
   }
 
-  const thisWeek = events.filter((e) => { const d = daysUntil(e.court_date ?? e.date ?? ""); return d >= 0 && d <= 7 }).length
-  const today = events.filter((e) => daysUntil(e.court_date ?? e.date ?? "") === 0).length
-  const upcoming = events.filter((e) => daysUntil(e.court_date ?? e.date ?? "") > 0).length
+  const todayCount = events.filter((e) => getEventDate(e).slice(0, 10) === todayStr()).length
+  const upcomingCount = events.filter((e) => {
+    const d = getEventDate(e).slice(0, 10)
+    return d >= todayStr() && (e.status ?? "") !== "missed" && (e.status ?? "") !== "completed"
+  }).length
+  const missedCount = events.filter((e) => (e.status ?? "") === "missed" || (getEventDate(e).slice(0, 10) < todayStr() && (e.status ?? "") !== "completed")).length
 
   const kpis = [
-    { label: "Today", value: String(today), color: Colors.red },
-    { label: "This Week", value: String(thisWeek), color: Colors.gold },
-    { label: "Upcoming", value: String(upcoming), color: Colors.blueBright },
+    { label: "Today", value: String(todayCount), color: Colors.red },
+    { label: "Upcoming", value: String(upcomingCount), color: Colors.blueBright },
+    { label: "Missed", value: String(missedCount), color: Colors.red },
     { label: "Total", value: String(events.length), color: Colors.text },
   ]
 
   const filterTabs = [
-    { key: "upcoming", label: "Upcoming" },
-    { key: "today", label: "Today" },
-    { key: "week", label: "This Week" },
-    { key: "past", label: "Past" },
     { key: "all", label: "All" },
+    { key: "today", label: "Today" },
+    { key: "upcoming", label: "Upcoming" },
+    { key: "missed", label: "Missed" },
   ]
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      {/* Header */}
       <View style={s.header}>
         <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.gold + "12", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.gold + "30" }}>
           <Ionicons name="calendar-outline" size={17} color={Colors.gold} />
@@ -157,22 +192,20 @@ export function CalendarScreen() {
           <Text style={s.subtitle}>Upcoming hearing dates</Text>
         </View>
         <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
-          <Ionicons name="calendar-outline" size={16} color="#fff" />
+          <Ionicons name="calendar-outline" size={16} color={Colors.blueLight} />
           <Text style={s.addBtnText}>Add Date</Text>
         </TouchableOpacity>
       </View>
 
-      {/* KPI Row */}
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={s.kpiValue}>{k.value}</Text>
-            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Filter Tabs */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
         {filterTabs.map((t) => (
           <TouchableOpacity
@@ -199,37 +232,40 @@ export function CalendarScreen() {
           ListEmptyComponent={
             <View style={s.center}>
               <Ionicons name="calendar-outline" size={48} color={Colors.mutedDim} />
-              <Text style={s.emptyTitle}>No court dates</Text>
-              <Text style={s.emptyText}>No dates match the selected filter.</Text>
+              <Text style={s.emptyTitle}>No events</Text>
+              <Text style={s.emptyText}>No events match the selected filter.</Text>
             </View>
           }
           renderItem={({ item }) => {
-            const name = item.client_name ?? item.defendant_name ?? item.full_name ?? "Unknown"
-            const dateStr = item.court_date ?? item.date ?? ""
-            const timeStr = item.court_time ?? item.time ?? ""
-            const courtName = item.court_name ?? item.court ?? ""
+            const name = item.defendant_name ?? item.client_name ?? item.name ?? "Unknown"
+            const dateStr = getEventDate(item)
+            const timeStr = item.event_time ?? item.court_time ?? item.time ?? ""
+            const courtName = item.court ?? item.court_name ?? ""
             const county = item.county ?? item.location ?? ""
-            const caseNum = item.case_number ?? item.booking_number ?? ""
-            const courtType = item.hearing_type ?? item.court_type ?? "Hearing"
-            const typeColor = COURT_TYPE_COLORS[courtType] ?? COURT_TYPE_COLORS.hearing
+            const caseNum = item.booking_number ?? item.case_number ?? ""
+            const eventType = item.type ?? item.event_type ?? item.hearing_type ?? "Court Date"
+            const typeColor = EVENT_TYPE_COLORS[eventType] ?? EVENT_TYPE_COLORS["Other"]
+            const itemStatus = getEventStatus(item)
+            const statusColor = STATUS_BADGE_COLORS[itemStatus] ?? STATUS_BADGE_COLORS.upcoming
             const days = daysUntil(dateStr)
-            const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
+            const judge = item.judge ?? ""
+            const address = item.address ?? ""
 
             let urgencyColor = Colors.mutedDim
             let urgencyText = ""
             if (days === 0) { urgencyColor = Colors.red; urgencyText = "TODAY" }
             else if (days === 1) { urgencyColor = Colors.orange; urgencyText = "TOMORROW" }
-            else if (days <= 7) { urgencyColor = Colors.gold; urgencyText = `${days}d` }
+            else if (days <= 7 && days > 0) { urgencyColor = Colors.gold; urgencyText = `${days}d` }
             else if (days > 0) { urgencyText = `${days}d` }
 
             return (
-              <View style={[s.card, days === 0 && s.cardToday, days === 1 && s.cardTomorrow]}>
+              <View style={[s.card, days === 0 && s.cardToday, days === 1 && s.cardTomorrow, itemStatus === "missed" && s.cardMissed]}>
                 <View style={s.cardTop}>
                   <View style={s.dateBox}>
                     {dateStr ? (
                       <>
                         <Text style={s.dateMonth}>{new Date(dateStr).toLocaleDateString("en-US", { month: "short" }).toUpperCase()}</Text>
-                        <Text style={[s.dateDay, days <= 1 && { color: urgencyColor }]}>
+                        <Text style={[s.dateDay, days <= 1 && days >= 0 && { color: urgencyColor }]}>
                           {new Date(dateStr).getDate()}
                         </Text>
                       </>
@@ -247,9 +283,15 @@ export function CalendarScreen() {
                         <Text style={[s.urgencyText, { color: urgencyColor }]}>{urgencyText}</Text>
                       </View>
                     )}
-                    <View style={[s.typeBadge, { backgroundColor: typeColor.bg }]}>
-                      <Text style={[s.typeText, { color: typeColor.text }]}>{courtType}</Text>
+                    <View style={[s.statusBadge, { backgroundColor: statusColor.bg }]}>
+                      <Text style={[s.statusText, { color: statusColor.text }]}>{itemStatus}</Text>
                     </View>
+                  </View>
+                </View>
+
+                <View style={s.typesRow}>
+                  <View style={[s.typeChipDisplay, { backgroundColor: typeColor.bg }]}>
+                    <Text style={[s.typeChipDisplayText, { color: typeColor.text }]}>{eventType}</Text>
                   </View>
                 </View>
 
@@ -272,6 +314,18 @@ export function CalendarScreen() {
                       <Text style={s.metaText}>#{caseNum}</Text>
                     </View>
                   )}
+                  {!!judge && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="person-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>Judge {judge}</Text>
+                    </View>
+                  )}
+                  {!!address && (
+                    <View style={s.metaItem}>
+                      <Ionicons name="map-outline" size={12} color={Colors.mutedDim} />
+                      <Text style={s.metaText}>{address}</Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={s.cardFooter}>
@@ -292,44 +346,55 @@ export function CalendarScreen() {
           }}
         />
       )}
-      {/* Add Date Modal */}
+
       <Modal visible={showAdd} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
-            <View style={s.modalCard}>
-                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+            <ScrollView style={s.modalCard} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
               <View style={s.modalHeader}>
                 <Text style={s.modalTitle}>Add Court Date</Text>
                 <TouchableOpacity onPress={() => setShowAdd(false)}>
                   <Ionicons name="close" size={22} color={Colors.muted} />
                 </TouchableOpacity>
               </View>
+
               {[
                 { key: "client_name", label: "Client Name *", placeholder: "Full name" },
                 { key: "court_date", label: "Court Date * (YYYY-MM-DD)", placeholder: "2026-07-15" },
                 { key: "court_time", label: "Time (HH:MM)", placeholder: "09:00" },
                 { key: "court_name", label: "Court Name", placeholder: "Superior Court" },
                 { key: "county", label: "County", placeholder: "Los Angeles" },
+                { key: "judge", label: "Judge", placeholder: "Hon. John Smith" },
+                { key: "address", label: "Address", placeholder: "123 Main St, City, CA" },
               ].map((f) => (
                 <View key={f.key} style={s.field}>
                   <Text style={s.fieldLabel}>{f.label}</Text>
                   <TextInput style={s.fieldInput} value={(addForm as any)[f.key]} onChangeText={(v) => setAddForm((prev) => ({ ...prev, [f.key]: v }))} placeholder={f.placeholder} placeholderTextColor={Colors.mutedDim} />
                 </View>
               ))}
+
               <View style={s.field}>
-                <Text style={s.fieldLabel}>Hearing Type</Text>
+                <Text style={s.fieldLabel}>Event Type</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-                  {["Hearing", "Trial", "Arraignment", "Sentencing", "Bond Review"].map((t) => (
-                    <TouchableOpacity key={t} style={[s.typeChip, addForm.hearing_type === t && s.typeChipActive]} onPress={() => setAddForm((f) => ({ ...f, hearing_type: t }))}>
-                      <Text style={[s.typeChipText, addForm.hearing_type === t && { color: "#fff" }]}>{t}</Text>
+                  {EVENT_TYPES.map((t) => (
+                    <TouchableOpacity key={t} style={[s.typeChip, addForm.event_type === t && s.typeChipActive]} onPress={() => setAddForm((f) => ({ ...f, event_type: t }))}>
+                      <Text style={[s.typeChipText, addForm.event_type === t && { color: "#fff" }]}>{t}</Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
               </View>
+
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Notes</Text>
+                <TextInput style={[s.fieldInput, { height: 70, textAlignVertical: "top" }]} value={addForm.notes} onChangeText={(v) => setAddForm((f) => ({ ...f, notes: v }))} placeholder="Additional notes..." placeholderTextColor={Colors.mutedDim} multiline />
+              </View>
+
               <TouchableOpacity style={[s.submitBtn, adding && { opacity: 0.6 }]} onPress={handleAddDate} disabled={adding}>
                 {adding ? <ActivityIndicator size="small" color="#fff" /> : <Text style={s.submitBtnText}>Add Court Date</Text>}
               </TouchableOpacity>
-            </View>
+              <View style={{ height: 20 }} />
+            </ScrollView>
           </KeyboardAvoidingView>
         </View>
       </Modal>
@@ -344,10 +409,10 @@ const s = StyleSheet.create({
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
   addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
-  kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
+  kpiRow: { flexDirection: "row", gap: 8, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
-  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center", color: Colors.muted },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
   tabsRow: { paddingHorizontal: Spacing.xl, gap: 8 },
   tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: Radius.xl, backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
@@ -358,9 +423,10 @@ const s = StyleSheet.create({
   emptyTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.bold },
   emptyText: { fontSize: FontSize.sm, color: Colors.mutedDim },
   card: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
-  cardToday: { borderColor: Colors.red + "50", borderLeftWidth: 3, borderLeftColor: Colors.red },
+  cardToday: { borderLeftWidth: 3, borderLeftColor: Colors.red },
   cardTomorrow: { borderColor: Colors.orange + "40" },
-  cardTop: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.md, marginBottom: Spacing.md },
+  cardMissed: { borderLeftWidth: 3, borderLeftColor: Colors.red + "80" },
+  cardTop: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.md, marginBottom: Spacing.sm },
   dateBox: { width: 48, alignItems: "center", backgroundColor: Colors.blue + "14", borderRadius: Radius.md, paddingVertical: 6, borderWidth: 1, borderColor: Colors.blue + "25" },
   dateMonth: { fontSize: 9, color: Colors.blueBright, fontFamily: Font.bold, letterSpacing: 0.5 },
   dateDay: { fontSize: FontSize.xxl, color: Colors.text, fontFamily: Font.extrabold, lineHeight: 28 },
@@ -369,8 +435,11 @@ const s = StyleSheet.create({
   courtName: { fontSize: FontSize.xs, color: Colors.muted, marginTop: 3 },
   urgencyBadge: { borderWidth: 1, borderRadius: Radius.sm, paddingHorizontal: 7, paddingVertical: 3 },
   urgencyText: { fontSize: 10, fontFamily: Font.bold, letterSpacing: 0.5 },
-  typeBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
-  typeText: { fontSize: 10, fontFamily: Font.bold },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
+  statusText: { fontSize: 10, fontFamily: Font.bold, textTransform: "capitalize" },
+  typesRow: { flexDirection: "row", gap: 6, marginBottom: Spacing.sm },
+  typeChipDisplay: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.sm },
+  typeChipDisplayText: { fontSize: 10, fontFamily: Font.bold },
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
@@ -378,7 +447,7 @@ const s = StyleSheet.create({
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.82)", justifyContent: "flex-end" },
-  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  modalCard: { backgroundColor: Colors.bgPanel, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40, maxHeight: "92%" },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: Spacing.lg },
   modalTitle: { fontSize: FontSize.lg, color: Colors.text, fontFamily: Font.extrabold },
   field: { marginBottom: Spacing.md },

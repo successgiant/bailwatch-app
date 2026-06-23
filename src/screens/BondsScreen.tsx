@@ -15,18 +15,43 @@ function fmtMoney(v: any): string {
 }
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  approved:    { bg: Colors.gold + "18", text: Colors.gold },
+  active:      { bg: Colors.green + "18", text: Colors.green },
   active_bond: { bg: Colors.green + "18", text: Colors.green },
   at_risk:     { bg: Colors.red + "18", text: Colors.red },
-  closed:      { bg: Colors.purple + "18", text: Colors.purple },
+  approved:    { bg: Colors.blue + "18", text: Colors.blueBright },
+  closed:      { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
+  pending:     { bg: Colors.gold + "18", text: Colors.gold },
   revoked:     { bg: Colors.red + "20", text: Colors.red },
   canceled:    { bg: Colors.mutedDim + "18", text: Colors.mutedDim },
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  approved: "Approved", active_bond: "Active Bond", at_risk: "At Risk",
-  closed: "Closed", revoked: "Revoked", canceled: "Canceled",
+  active: "Active", active_bond: "Active", at_risk: "At Risk",
+  approved: "Approved", closed: "Closed", revoked: "Revoked",
+  canceled: "Canceled", pending: "Pending",
 }
+
+const mapBond = (item: any) => ({
+  id: item.id,
+  bond_number: item.bond_number ?? item.id ?? "",
+  name: item.client_name ?? item.defendant_name ?? item.defendant?.full_name ?? "",
+  county: item.county ?? "",
+  charges: item.charges ?? [],
+  bond_amount: item.bond_amount ?? 0,
+  premium: item.premium ?? 0,
+  balance: item.balance ?? 0,
+  status: item.status ?? "pending",
+  court_date: item.court_date ?? null,
+  court_time: item.court_time ?? null,
+  agent: item.agent ?? "",
+  surety: item.surety ?? "",
+  case_number: item.case_number ?? "",
+  payments_count: item.payments_count ?? 0,
+  documents_count: item.documents_count ?? 0,
+  notes_count: item.notes_count ?? 0,
+  defendant_phone: item.defendant?.phone ?? item.defendant_phone ?? "",
+  defendant_dob: item.defendant?.dob ?? item.defendant_dob ?? "",
+})
 
 export function BondsScreen() {
   const { identity } = useAuth()
@@ -46,7 +71,7 @@ export function BondsScreen() {
     try {
       const res: any = await api.bonds(identity)
       const raw = res?.data?.results ?? res?.data ?? res?.results ?? res
-      const list = Array.isArray(raw) ? raw : []
+      const list = Array.isArray(raw) ? raw.map(mapBond) : []
       setBonds(list)
       applyFilters(query, statusFilter, list)
     } catch {} finally {
@@ -75,65 +100,69 @@ export function BondsScreen() {
 
   const applyFilters = (q: string, status: string, source = bonds) => {
     let out = source
-    if (status !== "all") out = out.filter((b) => (b.status ?? "").toLowerCase() === status)
+    if (status !== "all") out = out.filter((b) => {
+      const s = (b.status ?? "").toLowerCase()
+      if (status === "active") return s === "active" || s === "active_bond"
+      if (status === "at_risk") return s === "at_risk"
+      return s === status
+    })
     if (q.trim()) {
       const lq = q.toLowerCase()
       out = out.filter((b) =>
-        (b.defendant_name ?? b.defendant ?? "").toLowerCase().includes(lq) ||
-        (b.bond_number ?? b.id ?? "").toString().toLowerCase().includes(lq) ||
-        (b.county ?? "").toLowerCase().includes(lq)
+        (b.name ?? "").toLowerCase().includes(lq) ||
+        String(b.bond_number ?? b.id ?? "").toLowerCase().includes(lq) ||
+        (b.county ?? "").toLowerCase().includes(lq) ||
+        (b.case_number ?? "").toLowerCase().includes(lq)
       )
     }
     setFiltered(out)
   }
 
-  const statusCounts: Record<string, number> = {}
-  bonds.forEach((b) => {
-    const s = (b.status ?? "").toLowerCase()
-    statusCounts[s] = (statusCounts[s] ?? 0) + 1
-  })
+  const activeBonds = bonds.filter((b) => ["active", "active_bond"].includes((b.status ?? "").toLowerCase()))
+  const atRiskBonds = bonds.filter((b) => (b.status ?? "").toLowerCase() === "at_risk")
+  const approvedBonds = bonds.filter((b) => (b.status ?? "").toLowerCase() === "approved")
+  const totalValue = bonds.reduce((sum, b) => sum + (parseFloat(String(b.bond_amount ?? "0").replace(/[$,]/g, "")) || 0), 0)
 
   const kpis = [
-    { label: "Total Bonds", value: String(bonds.length), color: Colors.text },
-    { label: "Active", value: String(bonds.filter((b) => (b.status ?? "").toLowerCase() === "active_bond").length), color: Colors.green },
-    { label: "At Risk", value: String(bonds.filter((b) => (b.status ?? "").toLowerCase() === "at_risk").length), color: Colors.red },
-    {
-      label: "Total Value",
-      value: fmtMoney(bonds.reduce((sum, b) => sum + (parseFloat(String(b.bond_amount ?? "0").replace(/[$,]/g, "")) || 0), 0)),
-      color: Colors.blueBright,
-    },
+    { label: "Active", value: String(activeBonds.length), color: Colors.green },
+    { label: "At-Risk", value: String(atRiskBonds.length), color: Colors.red },
+    { label: "Approved", value: String(approvedBonds.length), color: Colors.blueBright },
+    { label: "Total Value", value: fmtMoney(totalValue), color: Colors.gold },
   ]
 
-  const statusTabs = ["all", "active_bond", "approved", "at_risk", "closed", "revoked"]
+  const statusTabs = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "at_risk", label: "At-Risk" },
+    { key: "approved", label: "Approved" },
+    { key: "closed", label: "Closed" },
+  ]
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      {/* Header */}
       <View style={s.header}>
         <View style={{ width: 34, height: 34, borderRadius: Radius.sm, backgroundColor: Colors.blueIconBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.blueIconBorder }}>
-          <Ionicons name="shield-checkmark-outline" size={17} color={Colors.blue} />
+          <Ionicons name="shield-checkmark-outline" size={17} color={Colors.blueBright} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>Bonds</Text>
           <Text style={s.subtitle}>{bonds.length} total bonds</Text>
         </View>
         <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
-          <Ionicons name="add" size={18} color="#fff" />
+          <Ionicons name="add" size={18} color={Colors.blueLight} />
           <Text style={s.addBtnText}>New Bond</Text>
         </TouchableOpacity>
       </View>
 
-      {/* KPI Row */}
       <View style={s.kpiRow}>
         {kpis.map((k) => (
           <View key={k.label} style={s.kpiCard}>
-            <Text style={s.kpiValue}>{k.value}</Text>
-            <Text style={[s.kpiLabel, { color: k.color }]}>{k.label}</Text>
+            <Text style={[s.kpiValue, { color: k.color }]}>{k.value}</Text>
+            <Text style={s.kpiLabel}>{k.label}</Text>
           </View>
         ))}
       </View>
 
-      {/* Search */}
       <View style={s.searchWrap}>
         <Ionicons name="search-outline" size={16} color={Colors.mutedDim} />
         <TextInput
@@ -150,20 +179,16 @@ export function BondsScreen() {
         )}
       </View>
 
-      {/* Status filter */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsRow}>
-        {statusTabs.map((t) => {
-          const label = t === "all" ? `All (${bonds.length})` : `${STATUS_LABELS[t] ?? t} (${statusCounts[t] ?? 0})`
-          return (
-            <TouchableOpacity
-              key={t}
-              style={[s.tab, statusFilter === t && s.tabActive]}
-              onPress={() => { setStatusFilter(t); applyFilters(query, t) }}
-            >
-              <Text style={[s.tabText, statusFilter === t && s.tabTextActive]}>{label}</Text>
-            </TouchableOpacity>
-          )
-        })}
+        {statusTabs.map((t) => (
+          <TouchableOpacity
+            key={t.key}
+            style={[s.tab, statusFilter === t.key && s.tabActive]}
+            onPress={() => { setStatusFilter(t.key); applyFilters(query, t.key) }}
+          >
+            <Text style={[s.tabText, statusFilter === t.key && s.tabTextActive]}>{t.label}</Text>
+          </TouchableOpacity>
+        ))}
       </ScrollView>
 
       {loading ? (
@@ -184,9 +209,8 @@ export function BondsScreen() {
             </View>
           }
           renderItem={({ item }) => {
-            const defName = item.defendant_name ?? item.defendant ?? "Unknown"
-            const initials = defName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
-            const status = (item.status ?? "approved").toLowerCase()
+            const initials = item.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "?"
+            const status = (item.status ?? "pending").toLowerCase()
             const sc = STATUS_COLORS[status] ?? { bg: Colors.mutedDim + "18", text: Colors.mutedDim }
             const statusLabel = STATUS_LABELS[status] ?? item.status ?? "Unknown"
             const courtDate = item.court_date ? new Date(item.court_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null
@@ -201,9 +225,9 @@ export function BondsScreen() {
                     <Text style={s.avatarText}>{initials}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={s.defName}>{defName}</Text>
+                    <Text style={s.defName}>{item.name || "Unknown"}</Text>
                     {!!item.bond_number && <Text style={s.bondNum}>Bond #{item.bond_number}</Text>}
-                    {!item.bond_number && !!item.id && <Text style={s.bondNum}>#{item.id}</Text>}
+                    {!!item.case_number && <Text style={s.bondNum}>Case #{item.case_number}</Text>}
                   </View>
                   <View style={[s.statusBadge, { backgroundColor: sc.bg }]}>
                     <Text style={[s.statusText, { color: sc.text }]}>{statusLabel}</Text>
@@ -239,7 +263,7 @@ export function BondsScreen() {
                   {courtDate && (
                     <View style={s.metaItem}>
                       <Ionicons name="calendar-outline" size={12} color={Colors.mutedDim} />
-                      <Text style={s.metaText}>{courtDate}</Text>
+                      <Text style={s.metaText}>{courtDate}{item.court_time ? ` · ${item.court_time}` : ""}</Text>
                     </View>
                   )}
                   {!!item.surety && (
@@ -260,6 +284,29 @@ export function BondsScreen() {
                     {charges.length > 2 && (
                       <View style={s.moreCharges}>
                         <Text style={s.moreChargesText}>+{charges.length - 2}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {(item.payments_count > 0 || item.documents_count > 0) && (
+                  <View style={s.countsRow}>
+                    {item.payments_count > 0 && (
+                      <View style={s.countChip}>
+                        <Ionicons name="card-outline" size={10} color={Colors.green} />
+                        <Text style={[s.countChipText, { color: Colors.green }]}>{item.payments_count} payments</Text>
+                      </View>
+                    )}
+                    {item.documents_count > 0 && (
+                      <View style={s.countChip}>
+                        <Ionicons name="document-outline" size={10} color={Colors.blueLight} />
+                        <Text style={[s.countChipText, { color: Colors.blueLight }]}>{item.documents_count} docs</Text>
+                      </View>
+                    )}
+                    {item.notes_count > 0 && (
+                      <View style={s.countChip}>
+                        <Ionicons name="chatbox-outline" size={10} color={Colors.muted} />
+                        <Text style={[s.countChipText, { color: Colors.muted }]}>{item.notes_count} notes</Text>
                       </View>
                     )}
                   </View>
@@ -286,7 +333,7 @@ export function BondsScreen() {
         <View style={s.modalOverlay}>
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ width: "100%" }}>
             <ScrollView style={s.modalCard} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
+              <View style={{ width: 40, height: 4, backgroundColor: Colors.dragHandle, borderRadius: 2, alignSelf: "center", marginBottom: 20 }} />
               <View style={s.modalHeader}>
                 <Text style={s.modalTitle}>New Bond</Text>
                 <TouchableOpacity onPress={() => setShowAdd(false)}>
@@ -342,10 +389,10 @@ const s = StyleSheet.create({
   subtitle: { fontSize: FontSize.xs, color: Colors.mutedDim, marginTop: 2 },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.sm, backgroundColor: Colors.blueSubtle, borderWidth: 1, borderColor: Colors.blueBorder },
   addBtnText: { fontSize: FontSize.xs, color: Colors.blueLight, fontFamily: Font.bold },
-  kpiRow: { flexDirection: "row", gap: 10, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
+  kpiRow: { flexDirection: "row", gap: 8, paddingHorizontal: Spacing.xl, marginBottom: Spacing.md },
   kpiCard: { flex: 1, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, alignItems: "center" },
-  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold, color: Colors.text },
-  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center" },
+  kpiValue: { fontSize: FontSize.xl, fontFamily: Font.extrabold },
+  kpiLabel: { fontSize: 9, fontFamily: Font.semibold, marginTop: 3, textAlign: "center", color: Colors.muted },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: Spacing.xl, marginBottom: Spacing.sm, backgroundColor: Colors.bgCard, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, height: 44 },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.sm },
   tabsScroll: { marginBottom: Spacing.md, height: 38 },
@@ -371,11 +418,14 @@ const s = StyleSheet.create({
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: Spacing.sm },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.muted },
-  chargesRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: Spacing.md },
+  chargesRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: Spacing.sm },
   chargePill: { backgroundColor: Colors.red + "14", borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.red + "25", paddingHorizontal: 8, paddingVertical: 3 },
   chargePillText: { fontSize: 10, color: Colors.red + "cc", fontFamily: Font.medium },
   moreCharges: { backgroundColor: Colors.bgPanel, borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 3 },
   moreChargesText: { fontSize: 10, color: Colors.mutedDim },
+  countsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: Spacing.sm },
+  countChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.bgPanel, borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: Colors.border },
+  countChipText: { fontSize: 10, fontFamily: Font.medium },
   cardFooter: { flexDirection: "row", alignItems: "center", paddingTop: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.borderFaint },
   footerAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 8 },
   footerActionText: { fontSize: FontSize.xs, color: Colors.blueBright, fontFamily: Font.semibold },
