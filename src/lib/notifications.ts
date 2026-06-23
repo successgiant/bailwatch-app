@@ -1,7 +1,8 @@
 import * as Notifications from "expo-notifications"
 import { Platform } from "react-native"
+import { apiPost, apiDelete } from "./api"
 
-// Show notifications even when app is in foreground
+// Show banners even when app is foregrounded
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -39,45 +40,33 @@ export async function setupNotifications(): Promise<boolean> {
   return status === "granted"
 }
 
-export async function sendBookingNotification(booking: any) {
-  const name = booking.defendant_name ?? booking.name ?? "Unknown Defendant"
-  const rawCharges = booking.charges ?? []
-  const topCharge =
-    typeof rawCharges[0] === "string"
-      ? rawCharges[0]
-      : rawCharges[0]?.charge_description ?? rawCharges[0]?.charge ?? booking.top_charge ?? "Booking"
-  const county = booking.county ?? booking.county_name ?? ""
-  const rawAmt = booking.bond_amount ?? booking.total_bond ?? ""
-  const bond = rawAmt
-    ? `$${parseFloat(String(rawAmt).replace(/[$,]/g, "")).toLocaleString("en-US", { minimumFractionDigits: 0 })}`
-    : ""
+/**
+ * Get the Expo push token for this device and register it with the backend.
+ * Must be called after notification permission is granted.
+ */
+export async function registerPushToken(identity: string): Promise<void> {
+  try {
+    const { data: token } = await Notifications.getExpoPushTokenAsync()
+    if (!token) return
 
-  const bodyParts = [topCharge, county, bond].filter(Boolean)
-
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "🚨 New Booking Alert",
-      body: `${name} — ${bodyParts.join(" · ")}`,
-      data: { bookingId: booking.id ?? booking.booking_id, type: "new_booking" },
-      sound: "default",
-      ...(Platform.OS === "android" ? { channelId: "bookings" } : {}),
-    },
-    trigger: null,
-  })
+    await apiPost("devices/register/", identity, {
+      token,
+      platform: Platform.OS,
+    })
+  } catch (err) {
+    // Non-fatal — push just won't work on this device
+    console.warn("Push token registration failed:", err)
+  }
 }
 
-export async function sendRearrestNotification(client: any) {
-  const name = client.name ?? client.defendant_name ?? "A watched client"
-  const county = client.county ?? ""
-
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "⚠️ Re-Arrest Detected",
-      body: `${name} has been re-arrested${county ? ` in ${county}` : ""}. Immediate action may be required.`,
-      data: { clientId: client.id, type: "rearrest" },
-      sound: "default",
-      ...(Platform.OS === "android" ? { channelId: "bondwatch" } : {}),
-    },
-    trigger: null,
-  })
+/**
+ * Unregister push token when user logs out.
+ */
+export async function unregisterPushToken(identity: string): Promise<void> {
+  try {
+    const { data: token } = await Notifications.getExpoPushTokenAsync()
+    if (!token) return
+    // Pass token in query string since apiDelete doesn't support a body
+    await apiDelete(`devices/register/?token=${encodeURIComponent(token)}`, identity)
+  } catch {}
 }

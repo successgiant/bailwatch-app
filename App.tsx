@@ -15,8 +15,7 @@ import { AuthProvider, useAuth } from "./src/context/AuthContext"
 import { TabNavigator } from "./src/navigation/TabNavigator"
 import { AuthNavigator } from "./src/navigation/AuthNavigator"
 import { Colors } from "./src/constants/theme"
-import { setupNotifications } from "./src/lib/notifications"
-import { registerPollers, seedSeenBookings, seedSeenRearrests } from "./src/lib/bookingPoller"
+import { setupNotifications, registerPushToken } from "./src/lib/notifications"
 
 // Apply Inter as the default font for all Text components
 ;(Text as any).defaultProps = (Text as any).defaultProps ?? {}
@@ -30,12 +29,10 @@ function AppNavigator() {
     if (!identity || initialized.current) return
     initialized.current = true
 
-    // Request permission + register background pollers once after login
+    // Request permission then register this device's push token with backend
     setupNotifications().then((granted) => {
       if (!granted) return
-      registerPollers()
-      seedSeenBookings(identity)
-      seedSeenRearrests(identity)
+      registerPushToken(identity)
     })
   }, [identity])
 
