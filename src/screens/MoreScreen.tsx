@@ -10,29 +10,32 @@ type NavProp = NativeStackNavigationProp<any>
 
 const MENU_SECTIONS = [
   {
+    title: "Monitoring",
+    items: [
+      { icon: "alert-circle-outline" as const,  label: "ArrestAlert",   sublabel: "Live Bookings",         screen: "ArrestAlert", color: Colors.red },
+      { icon: "eye-outline" as const,            label: "BondWatch",     sublabel: "Re-Arrest Monitoring",  screen: "BondWatch",   color: Colors.blue },
+      { icon: "location-outline" as const,       label: "BondTrack",     sublabel: "GPS Monitoring",        screen: "BondTrack",   color: Colors.green },
+    ],
+  },
+  {
     title: "Operations",
     items: [
-      { icon: "shield-outline" as const, label: "BondWatch", screen: "BondWatch", color: Colors.blue },
-      { icon: "location-outline" as const, label: "BondTrack GPS", screen: "BondTrack", color: Colors.green },
-      { icon: "document-text-outline" as const, label: "Bond Applications", screen: "BondApp", color: Colors.purple },
-      { icon: "create-outline" as const, label: "eSign Documents", screen: "ESign", color: Colors.gold },
-      { icon: "briefcase-outline" as const, label: "Powers of Attorney", screen: "Powers", color: Colors.blueBright },
-      { icon: "document-outline" as const, label: "Documents & Files", screen: "Documents", color: Colors.blueLight },
-      { icon: "chatbubbles-outline" as const, label: "Communications", screen: "Messages", color: Colors.emerald },
+      { icon: "briefcase-outline" as const,      label: "Powers",        sublabel: "Surety Bond Powers",    screen: "Powers",      color: Colors.blueBright },
+      { icon: "document-text-outline" as const,  label: "BondApp",       sublabel: "Applications",          screen: "BondApp",     color: Colors.purple },
+      { icon: "wallet-outline" as const,         label: "Payments",      sublabel: "Client Ledger",         screen: "Payments",    color: Colors.emerald },
+      { icon: "calendar-outline" as const,       label: "Calendar",      sublabel: "Court Dates",           screen: "Calendar",    color: Colors.gold },
+      { icon: "map-outline" as const,            label: "County Coverage", sublabel: "Assigned Counties",   screen: "CountyCoverage", color: Colors.blue },
+      { icon: "create-outline" as const,         label: "E-Sign",        sublabel: "Digital Signatures",    screen: "ESign",       color: Colors.gold },
+      { icon: "document-outline" as const,       label: "Documents",     sublabel: "Files & Uploads",       screen: "Documents",   color: Colors.blueLight },
+      { icon: "chatbubble-outline" as const,     label: "Messages",      sublabel: "Client Communication",  screen: "Messages",    color: Colors.emerald },
     ],
   },
   {
-    title: "Analytics",
+    title: "Analytics & Team",
     items: [
-      { icon: "bar-chart-outline" as const, label: "Reports", screen: "Reports", color: Colors.emerald },
-      { icon: "map-outline" as const, label: "County Coverage", screen: "CountyCoverage", color: Colors.blue },
-    ],
-  },
-  {
-    title: "Team & Account",
-    items: [
-      { icon: "people-outline" as const, label: "BondTeam", screen: "BondTeam", color: Colors.purple },
-      { icon: "card-outline" as const, label: "Billing", screen: "Billing", color: Colors.green },
+      { icon: "bar-chart-outline" as const,      label: "Reports",       sublabel: "Analytics",             screen: "Reports",     color: Colors.emerald },
+      { icon: "people-outline" as const,         label: "BondTeam",      sublabel: "Agents & Team",         screen: "BondTeam",    color: Colors.purple },
+      { icon: "card-outline" as const,           label: "Billing / Add-Ons", sublabel: "Subscription",      screen: "Billing",     color: Colors.green },
     ],
   },
 ]
@@ -81,7 +84,12 @@ export function MoreScreen() {
                   <View style={[s.rowIcon, { backgroundColor: item.color + "18" }]}>
                     <Ionicons name={item.icon} size={18} color={item.color} />
                   </View>
-                  <Text style={s.rowLabel}>{item.label}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.rowLabel}>{item.label}</Text>
+                    {"sublabel" in item && item.sublabel ? (
+                      <Text style={s.rowSublabel}>{item.sublabel}</Text>
+                    ) : null}
+                  </View>
                   <Ionicons name="chevron-forward" size={15} color={Colors.mutedDim} />
                 </TouchableOpacity>
               ))}
@@ -143,7 +151,8 @@ const s = StyleSheet.create({
     width: 36, height: 36, borderRadius: Radius.sm,
     alignItems: "center", justifyContent: "center",
   },
-  rowLabel: { flex: 1, fontSize: FontSize.sm, color: Colors.text, fontFamily: Font.semibold },
+  rowLabel: { fontSize: FontSize.sm, color: Colors.text, fontFamily: Font.semibold },
+  rowSublabel: { fontSize: 11, color: Colors.mutedDim, marginTop: 1 },
   logoutBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     marginHorizontal: Spacing.xl, marginBottom: Spacing.md,
