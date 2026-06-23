@@ -1,7 +1,8 @@
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs"
 import { createNativeStackNavigator } from "@react-navigation/native-stack"
 import { Ionicons } from "@expo/vector-icons"
-import { Platform, View } from "react-native"
+import { Platform, View, Text, TouchableOpacity, StyleSheet } from "react-native"
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs"
 import { DashboardScreen } from "../screens/DashboardScreen"
 import { ClientsScreen } from "../screens/ClientsScreen"
 import { BondsScreen } from "../screens/BondsScreen"
@@ -22,11 +23,138 @@ import { CountyCoverageScreen } from "../screens/CountyCoverageScreen"
 import { BondTrackScreen } from "../screens/BondTrackScreen"
 import { DocumentsScreen } from "../screens/DocumentsScreen"
 import { ClientCaseDetailScreen } from "../screens/ClientCaseDetailScreen"
-import { Colors, FontSize } from "../constants/theme"
+import { Colors, Font } from "../constants/theme"
 import type { MoreStackParamList } from "../types"
 
 const Tab = createBottomTabNavigator()
 const MoreStack = createNativeStackNavigator<MoreStackParamList>()
+
+const TAB_ITEMS = [
+  { name: "Dashboard", icon: "grid",          iconOff: "grid-outline"          },
+  { name: "Clients",   icon: "people",         iconOff: "people-outline"        },
+  { name: "Bonds",     icon: "shield",         iconOff: "shield-outline"        },
+  { name: "Alerts",    icon: "notifications",  iconOff: "notifications-outline", badge: true },
+  { name: "More",      icon: "menu",           iconOff: "menu-outline"          },
+] as const
+
+function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  return (
+    <View style={tb.wrapper}>
+      <View style={tb.bar}>
+        {state.routes.map((route, index) => {
+          const focused = state.index === index
+          const tab = TAB_ITEMS[index]
+
+          return (
+            <TouchableOpacity
+              key={route.key}
+              style={tb.item}
+              activeOpacity={0.75}
+              onPress={() => {
+                const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true })
+                if (!focused && !event.defaultPrevented) navigation.navigate(route.name)
+              }}
+              onLongPress={() => navigation.emit({ type: "tabLongPress", target: route.key })}
+            >
+              {/* Active glow pill */}
+              {focused && <View style={tb.activePill} />}
+
+              {/* Icon + badge */}
+              <View style={tb.iconWrap}>
+                <Ionicons
+                  name={(focused ? tab.icon : tab.iconOff) as any}
+                  size={22}
+                  color={focused ? Colors.blueBright : Colors.mutedDim}
+                />
+                {"badge" in tab && tab.badge && !focused && (
+                  <View style={tb.badge} />
+                )}
+              </View>
+
+              {/* Label */}
+              <Text style={[tb.label, focused && tb.labelActive]}>
+                {route.name}
+              </Text>
+
+              {/* Active bottom bar */}
+              {focused && <View style={tb.activeDot} />}
+            </TouchableOpacity>
+          )
+        })}
+      </View>
+    </View>
+  )
+}
+
+const BOTTOM_SAFE = Platform.OS === "ios" ? 28 : 0
+
+const tb = StyleSheet.create({
+  wrapper: {
+    backgroundColor: Colors.bg,
+    paddingBottom: BOTTOM_SAFE,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(37,99,235,0.15)",
+  },
+  bar: {
+    flexDirection: "row",
+    height: 60,
+    marginHorizontal: 12,
+    marginTop: 6,
+    backgroundColor: Colors.bgCard,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(37,99,235,0.18)",
+    overflow: "hidden",
+  },
+  item: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    paddingTop: 4,
+  },
+  activePill: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 4,
+    right: 4,
+    borderRadius: 14,
+    backgroundColor: "rgba(59,130,246,0.12)",
+  },
+  iconWrap: {
+    position: "relative",
+  },
+  badge: {
+    position: "absolute",
+    top: -2,
+    right: -4,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: Colors.red,
+    borderWidth: 1,
+    borderColor: Colors.bgCard,
+  },
+  label: {
+    fontSize: 10,
+    fontFamily: Font.medium,
+    color: Colors.mutedDim,
+    marginTop: 3,
+  },
+  labelActive: {
+    color: Colors.blueBright,
+    fontFamily: Font.bold,
+  },
+  activeDot: {
+    position: "absolute",
+    bottom: 4,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.blueBright,
+  },
+})
 
 function MoreNavigator() {
   return (
@@ -62,59 +190,14 @@ function MoreNavigator() {
 export function TabNavigator() {
   return (
     <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: Colors.bg,
-          borderTopColor: Colors.border,
-          borderTopWidth: 1,
-          height: Platform.OS === "ios" ? 82 : 62,
-          paddingBottom: Platform.OS === "ios" ? 24 : 8,
-          paddingTop: 8,
-        },
-        tabBarActiveTintColor: Colors.blueBright,
-        tabBarInactiveTintColor: Colors.mutedDim,
-        tabBarLabelStyle: {
-          fontSize: FontSize.xs,
-          fontWeight: "600",
-          marginTop: 2,
-        },
-      }}
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen
-        name="Dashboard"
-        component={DashboardScreen}
-        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" size={size} color={color} /> }}
-      />
-      <Tab.Screen
-        name="Clients"
-        component={ClientsScreen}
-        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} /> }}
-      />
-      <Tab.Screen
-        name="Bonds"
-        component={BondsScreen}
-        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="shield-outline" size={size} color={color} /> }}
-      />
-      <Tab.Screen
-        name="Alerts"
-        component={AlertsScreen}
-        options={{
-          tabBarIcon: ({ color, focused, size }) => (
-            <View>
-              <Ionicons name="notifications-outline" size={size} color={color} />
-              {!focused && (
-                <View style={{ position: "absolute", top: -2, right: -4, width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.red }} />
-              )}
-            </View>
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="More"
-        component={MoreNavigator}
-        options={{ tabBarIcon: ({ color, size }) => <Ionicons name="menu-outline" size={size} color={color} /> }}
-      />
+      <Tab.Screen name="Dashboard" component={DashboardScreen} />
+      <Tab.Screen name="Clients"   component={ClientsScreen} />
+      <Tab.Screen name="Bonds"     component={BondsScreen} />
+      <Tab.Screen name="Alerts"    component={AlertsScreen} />
+      <Tab.Screen name="More"      component={MoreNavigator} />
     </Tab.Navigator>
   )
 }
