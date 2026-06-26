@@ -9,10 +9,10 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hirelocalusa.bailwatchpro"
+      "bundleIdentifier": "com.bailwatchpro.app"
     },
     "android": {
-      "package": "com.hirelocalusa.bailwatchpro",
+      "package": "com.bailwatchpro.app",
       "adaptiveIcon": {
         "backgroundColor": "#04070d",
         "foregroundImage": "./assets/android-icon-foreground.png",
